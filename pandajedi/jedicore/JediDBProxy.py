@@ -4550,7 +4550,10 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                 sqlI  = "INSERT INTO {0}.JEDI_Dataset_Contents ({1}) ".format(jedi_config.db.schemaJEDI,
                                                                               JediFileSpec.columnNames())
                 sqlI += JediFileSpec.bindValuesExpression()
-                # insert master dataset
+
+                # query for curval if MySQL
+                sql_curval = "SELECT  {0}.curval('JEDI_DATASETS_ID_SEQ')".format(jedi_config.db.schemaJEDI)
+
                 masterID = -1
                 datasetIdMap = {}
                 for datasetSpec in inMasterDatasetSpecList:
@@ -4561,7 +4564,17 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                         varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)            
                         # insert dataset
                         self.cur.execute(sql+comment,varMap)
-                        datasetID = long(varMap[':newDatasetID'].getvalue())
+
+                        # get curval from sequence if MySQL
+                        if panda_config.backend == 'mysql':
+                            self.cur.execute(sql_curval+comment)
+                            res=self.cur.fetchone()
+                            if res != None:
+                                datasetID, =res
+                        else:
+                            datasetID = long(varMap[':newDatasetID'].getvalue())
+
+                        #datasetID = long(varMap[':newDatasetID'].getvalue())
                         masterID = datasetID
                         datasetIdMap[datasetSpec.uniqueMapKey()] = datasetID
                         datasetSpec.datasetID = datasetID
@@ -4580,7 +4593,17 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                         varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)            
                         # insert dataset
                         self.cur.execute(sql+comment,varMap)
-                        datasetID = long(varMap[':newDatasetID'].getvalue())
+
+                        # get curval from sequence if MySQL
+                        if panda_config.backend == 'mysql':
+                            self.cur.execute(sql_curval+comment)
+                            res=self.cur.fetchone()
+                            if res != None:
+                                datasetID, =res
+                        else:
+                            datasetID = long(varMap[':newDatasetID'].getvalue())
+
+                        #datasetID = long(varMap[':newDatasetID'].getvalue())
                         datasetIdMap[datasetSpec.uniqueMapKey()] = datasetID
                         datasetSpec.datasetID = datasetID
                         # insert files
@@ -4598,7 +4621,17 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                     varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)            
                     # insert dataset
                     self.cur.execute(sql+comment,varMap)
-                    datasetID = long(varMap[':newDatasetID'].getvalue())
+
+                    # get curval from sequence if MySQL
+                    if panda_config.backend == 'mysql':
+                        self.cur.execute(sql_curval + comment)
+                        res = self.cur.fetchone()
+                        if res != None:
+                            datasetID, = res
+                    else:
+                        datasetID = long(varMap[':newDatasetID'].getvalue())
+
+                    #datasetID = long(varMap[':newDatasetID'].getvalue())
                     datasetIdMap[datasetSpec.outputMapKey()] = datasetID
                     datasetSpec.datasetID = datasetID
                     unmergeMasterID = datasetID
@@ -4611,7 +4644,17 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                     varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)            
                     # insert dataset
                     self.cur.execute(sql+comment,varMap)
-                    datasetID = long(varMap[':newDatasetID'].getvalue())
+
+                    # get curval from sequence if MySQL
+                    if panda_config.backend == 'mysql':
+                        self.cur.execute(sql_curval + comment)
+                        res = self.cur.fetchone()
+                        if res != None:
+                            datasetID, = res
+                    else:
+                        datasetID = long(varMap[':newDatasetID'].getvalue())
+
+                    #datasetID = long(varMap[':newDatasetID'].getvalue())
                     datasetIdMap[datasetSpec.outputMapKey()] = datasetID
                     datasetSpec.datasetID = datasetID
                 # insert output datasets
@@ -4629,7 +4672,17 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                     varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)            
                     # insert dataset
                     self.cur.execute(sql+comment,varMap)
-                    datasetID = long(varMap[':newDatasetID'].getvalue())
+
+                    # get curval from sequence if MySQL
+                    if panda_config.backend == 'mysql':
+                        self.cur.execute(sql_curval + comment)
+                        res = self.cur.fetchone()
+                        if res != None:
+                            datasetID, = res
+                    else:
+                        datasetID = long(varMap[':newDatasetID'].getvalue())
+
+                    #datasetID = long(varMap[':newDatasetID'].getvalue())
                     datasetIdMap[outputMapKey] = datasetID
                     datasetSpec.datasetID = datasetID
                 # insert outputTemplates
