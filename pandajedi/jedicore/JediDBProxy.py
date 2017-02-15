@@ -8873,6 +8873,11 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
     # lock task
     def lockTask_JEDI(self,jediTaskID,pid):
         comment = ' /* JediDBProxy.lockTask_JEDI */'
+
+        # 2 sec sleep for MySQL as the timestamps are in seconds2 sec sleep for MySQL as the timestamps are in seconds
+        if panda_config.backend == 'mysql':
+            time.sleep(2)
+
         methodName = self.getMethodName(comment)
         methodName += " <jediTaskID={0} pid={1}>".format(jediTaskID,pid)
         tmpLog = MsgWrapper(logger,methodName)
