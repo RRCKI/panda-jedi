@@ -1,6 +1,8 @@
 import re
 import sys
 import shlex
+import random
+import datetime
 
 from pandajedi.jedicore import Interaction
 from TaskRefinerBase import TaskRefinerBase
@@ -12,16 +14,62 @@ from pandaserver.dataservice import DataServiceUtils
 class AtlasProdTaskRefiner (TaskRefinerBase):
 
     # constructor
-    def __init__(self,taskBufferIF,ddmIF):
-        TaskRefinerBase.__init__(self,taskBufferIF,ddmIF)
+    def __init__(self, taskBufferIF, ddmIF):
+        TaskRefinerBase.__init__(self, taskBufferIF, ddmIF)
 
 
 
     # extract common parameters
     def extractCommon(self,jediTaskID,taskParamMap,workQueueMapper,splitRule):
+        tmpLog = self.tmpLog
         # set ddmBackEnd
         if not 'ddmBackEnd' in taskParamMap:
             taskParamMap['ddmBackEnd'] = 'rucio'
+        # get number of unprocessed events for event service
+        autoEsConversion = False
+        if 'esConvertible' in taskParamMap and taskParamMap['esConvertible'] == True:
+            maxPrio = self.taskBufferIF.getConfigValue('taskrefiner', 'AES_MAXTASKPRIORITY', 'jedi', 'atlas')
+            minPrio = self.taskBufferIF.getConfigValue('taskrefiner', 'AES_MINTASKPRIORITY', 'jedi', 'atlas')
+            if maxPrio is not None and maxPrio < taskParamMap['taskPriority']:
+                pass
+            elif minPrio is not None and minPrio > taskParamMap['taskPriority']:
+                pass
+            else:
+                # get threshold
+                minNumEvents = self.taskBufferIF.getConfigValue('taskrefiner', 'AES_EVENTPOOLSIZE', 'jedi', 'atlas')
+                nEvents, lastTaskTime = self.taskBufferIF.getNumUnprocessedEvents_JEDI(taskParamMap['vo'],
+                                                                                       taskParamMap['prodSourceLabel'],
+                                                                                       {'eventService': 1})
+                tmpLog.info('check for ES tot_num_unprocessed_events_AES={0} target_num_events_AES={1} last_AES_task_time={2}'.format(nEvents,
+                                                                                                                                      minNumEvents,
+                                                                                                                                      lastTaskTime))
+                # not chane many tasks at once
+                if lastTaskTime is None or (lastTaskTime < datetime.datetime.utcnow() - datetime.timedelta(minutes=5)):
+                    if minNumEvents is not None and nEvents < minNumEvents:
+                        autoEsConversion = True
+                        tmpLog.info('converted to AES')
+        # add ES paramsters
+        if ('esFraction' in taskParamMap and taskParamMap['esFraction'] > 0) or autoEsConversion:
+            tmpStr  = '<PANDA_ES_ONLY>--eventService=True</PANDA_ES_ONLY>'
+            taskParamMap['jobParameters'].append({'type':'constant',
+                                                  'value':tmpStr})
+            if 'nEventsPerWorker' not in taskParamMap and \
+                    (('esFraction' in taskParamMap and taskParamMap['esFraction'] > random.random()) or autoEsConversion):
+                taskParamMap['nEventsPerWorker'] = 1
+                if 'nEsConsumers' not in taskParamMap:
+                    tmpVal = self.taskBufferIF.getConfigValue('taskrefiner', 'AES_NESCONSUMERS', 'jedi', 'atlas')
+                    if tmpVal is None:
+                        tmpVal = 1
+                    taskParamMap['nEsConsumers'] = tmpVal
+                if 'nSitesPerJob' not in taskParamMap:
+                    tmpVal = self.taskBufferIF.getConfigValue('taskrefiner', 'AES_NSITESPERJOB', 'jedi', 'atlas')
+                    if tmpVal is not None:
+                        taskParamMap['nSitesPerJob'] = tmpVal
+                if 'mergeEsOnOS' not in taskParamMap:
+                    taskParamMap['mergeEsOnOS'] = True
+                if 'maxAttemptES' not in taskParamMap:
+                    taskParamMap['maxAttemptES'] = 10
+                taskParamMap['coreCount'] = 0
         TaskRefinerBase.extractCommon(self,jediTaskID,taskParamMap,workQueueMapper,splitRule)
 
 
@@ -32,39 +80,6 @@ class AtlasProdTaskRefiner (TaskRefinerBase):
         tmpLog = self.tmpLog
         tmpLog.debug('start taskType={0}'.format(self.taskSpec.taskType))
         try:
-            # add ES paramsters
-            if 'addEsParams' in taskParamMap and taskParamMap['addEsParams'] == True:
-                preInclude = False
-                preExec = False
-                for tmpItem in taskParamMap['jobParameters']:
-                    if 'value' in tmpItem:
-                        if 'preInclude' in tmpItem['value']:
-                            tmpStr = '<PANDA_ES_ONLY>,AthenaMP/AthenaMP_EventService.py</PANDA_ES_ONLY>'
-                            tmpItem['value'] = self.insertString('preInclude',tmpStr,tmpItem['value'])
-                            preInclude = True
-                        if 'preExec' in tmpItem['value']:
-                            tmpStr  = '<PANDA_ES_ONLY>;'
-                            tmpStr += 'import os;pilot_tmp=type(str(),(),{})();'
-                            tmpStr += 'pilot_tmp.__dict__.update(**os.environ);'
-                            tmpStr += 'from AthenaMP.AthenaMPFlags import jobproperties as jps;'
-                            tmpStr += 'jps.AthenaMPFlags.EventRangeChannel=pilot_tmp.PILOT_EVENTRANGECHANNEL'
-                            tmpStr += '</PANDA_ES_ONLY>'
-                            tmpItem['value'] = self.insertString('preExec',tmpStr,tmpItem['value'])
-                            preExec = True
-                # add if missing
-                if not preInclude:
-                    tmpStr = '<PANDA_ES_ONLY>preInclude="AthenaMP/AthenaMP_EventService.py"</PANDA_ES_ONLY>'
-                    taskParamMap['jobParameters'].append({'type':'constant',
-                                                          'value':tmpStr})
-                if not preExec:
-                    tmpStr  = '<PANDA_ES_ONLY>preExec="'
-                    tmpStr += 'import os;pilot_tmp=type(str(),(),{})();'
-                    tmpStr += 'pilot_tmp.__dict__.update(**os.environ);'
-                    tmpStr += 'from AthenaMP.AthenaMPFlags import jobproperties as jps;'
-                    tmpStr += 'jps.AthenaMPFlags.EventRangeChannel=pilot_tmp.PILOT_EVENTRANGECHANNEL'
-                    tmpStr += '"</PANDA_ES_ONLY>'
-                    taskParamMap['jobParameters'].append({'type':'constant',
-                                                          'value':tmpStr})
             # basic refine    
             self.doBasicRefine(taskParamMap)
             # set nosplit+repeat for DBR

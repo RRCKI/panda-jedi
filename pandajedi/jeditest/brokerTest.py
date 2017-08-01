@@ -33,10 +33,11 @@ s,taskSpec = tbIF.getTaskWithID_JEDI(jediTaskID)
 
 cloudName = taskSpec.cloud
 vo = taskSpec.vo
-prodSourceLabel = taskSpec.prodSourceLabel 
+prodSourceLabel = taskSpec.prodSourceLabel
 queueID = taskSpec.workQueue_ID
+gshare_name = taskSpec.gshare
 
-workQueue = tbIF.getWorkQueueMap().getQueueWithID(queueID)
+workQueue = tbIF.getWorkQueueMap().getQueueWithID(queueID, gshare_name)
 
 threadPool = ThreadPool()
 
@@ -61,7 +62,7 @@ for dummyID,tmpList in tmpListList:
         jobBroker = JobBroker(taskSpec.vo,taskSpec.prodSourceLabel)
         tmpStat = jobBroker.initializeMods(ddmIF.getInterface(vo),tbIF)
         splitter = JobSplitter()
-        gen = JobGeneratorThread(None,threadPool,tbIF,ddmIF,siteMapper,False,taskSetupper,None,None,None,None)
+        gen = JobGeneratorThread(None,threadPool,tbIF,ddmIF,siteMapper,False,taskSetupper,None,None,'dummy',None,None)
 
         taskParamMap = None
         if taskSpec.useLimitedSites():

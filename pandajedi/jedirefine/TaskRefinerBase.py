@@ -171,6 +171,9 @@ class TaskRefinerBase (object):
                 taskParamMap['nSitesPerJob'] = 2
             if not 'nEsConsumers' in taskParamMap:
                 taskParamMap['nEsConsumers'] = taskParamMap['nSitesPerJob']
+        # minimum granularity
+        if 'minGranularity' in taskParamMap:
+            taskParamMap['nEventsPerRange'] = taskParamMap['minGranularity']
         # event service flag
         if 'useJobCloning' in taskParamMap:
             taskSpec.eventService = 2
@@ -218,12 +221,15 @@ class TaskRefinerBase (object):
         self.setSplitRule(taskParamMap,'scoutSuccessRate', JediTaskSpec.splitRuleToken['scoutSuccessRate'])
         self.setSplitRule(taskParamMap,'t1Weight',         JediTaskSpec.splitRuleToken['t1Weight'])
         self.setSplitRule(taskParamMap,'maxAttemptES',     JediTaskSpec.splitRuleToken['maxAttemptES'])
+        self.setSplitRule(taskParamMap,'maxAttemptEsJob',  JediTaskSpec.splitRuleToken['maxAttemptEsJob'])
         self.setSplitRule(taskParamMap,'nSitesPerJob',     JediTaskSpec.splitRuleToken['nSitesPerJob'])
-        self.setSplitRule(taskParamMap,'nJumboJobs',       JediTaskSpec.splitRuleToken['nJumboJobs'])
         self.setSplitRule(taskParamMap,'nEventsPerMergeJob',   JediTaskSpec.splitRuleToken['nEventsPerMergeJob'])
         self.setSplitRule(taskParamMap,'nFilesPerMergeJob',    JediTaskSpec.splitRuleToken['nFilesPerMergeJob'])
         self.setSplitRule(taskParamMap,'nGBPerMergeJob',       JediTaskSpec.splitRuleToken['nGBPerMergeJob'])
         self.setSplitRule(taskParamMap,'nMaxFilesPerMergeJob', JediTaskSpec.splitRuleToken['nMaxFilesPerMergeJob'])
+        if 'nJumboJobs' in taskParamMap:
+            self.setSplitRule(taskParamMap,'nJumboJobs',JediTaskSpec.splitRuleToken['nJumboJobs'])
+            taskSpec.useJumbo = JediTaskSpec.enum_useJumbo['waiting']
         if taskParamMap.has_key('loadXML'):
             self.setSplitRule(None,3,JediTaskSpec.splitRuleToken['loadXML'])
             self.setSplitRule(None,4,JediTaskSpec.splitRuleToken['groupBoundaryID'])
@@ -233,6 +239,8 @@ class TaskRefinerBase (object):
             self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['noWaitParent'])
         if 'respectLB' in taskParamMap:
             self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['respectLB'])
+        if 'respectSplitRule' in taskParamMap:
+            self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['respectSplitRule'])
         if taskParamMap.has_key('reuseSecOnDemand'):
             self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['reuseSecOnDemand'])
         if 'ddmBackEnd' in taskParamMap:
@@ -263,7 +271,7 @@ class TaskRefinerBase (object):
         if 'switchEStoNormal' in taskParamMap:
             self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['switchEStoNormal'])
         if 'nEventsPerRange' in taskParamMap:
-            self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['dynamicNumEvents'])
+            self.setSplitRule(taskParamMap,'nEventsPerRange',JediTaskSpec.splitRuleToken['dynamicNumEvents'])
         if 'allowInputWAN' in taskParamMap and taskParamMap['allowInputWAN'] == True:
             self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['allowInputWAN'])
         if 'putLogToOS' in taskParamMap and taskParamMap['putLogToOS'] == True:
@@ -276,15 +284,20 @@ class TaskRefinerBase (object):
             self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['useFileAsSourceLFN'])
         if 'ignoreMissingInDS' in taskParamMap and taskParamMap['ignoreMissingInDS'] == True:
             self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['ignoreMissingInDS'])
+        if 'noExecStrCnv' in taskParamMap and taskParamMap['noExecStrCnv'] == True:
+            self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['noExecStrCnv'])
+        if 'inFilePosEvtNum' in taskParamMap and taskParamMap['inFilePosEvtNum'] == True:
+            self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['inFilePosEvtNum'])
         # work queue
         workQueue = None
         if 'workQueueName' in taskParamMap:
             # work queue is specified
-            workQueue = workQueueMapper.getQueueWithName(taskSpec.vo,taskSpec.prodSourceLabel,taskParamMap['workQueueName'])
+            workQueue = workQueueMapper.getQueueByName(taskSpec.vo, taskSpec.prodSourceLabel, taskParamMap['workQueueName'])
         if workQueue is None:
             # get work queue based on task attributes
             workQueue,tmpStr = workQueueMapper.getQueueWithSelParams(taskSpec.vo,
                                                                      taskSpec.prodSourceLabel,
+                                                                     prodSourceLabel=taskSpec.prodSourceLabel,
                                                                      processingType=taskSpec.processingType,
                                                                      workingGroup=taskSpec.workingGroup,
                                                                      coreCount=taskSpec.coreCount,
@@ -311,12 +324,18 @@ class TaskRefinerBase (object):
             # get share based on definition
             gshare = self.taskBufferIF.get_share_for_task(self.taskSpec)
             if gshare is None:
-                gshare = 'No match'
+                gshare = 'Undefined' # Should not happen. Undefined is set when no share is found
                 # errStr  = 'share is undefined for vo={0} label={1} '.format(taskSpec.vo,taskSpec.prodSourceLabel)
                 # errStr += 'workingGroup={0} campaign={1} '.format(taskSpec.workingGroup, taskSpec.campaign)
                 # raise RuntimeError,errStr
 
             self.taskSpec.gshare = gshare
+
+        # Initialize the resource type
+        try:
+            self.taskSpec.resource_type = self.taskBufferIF.get_resource_type_task(self.taskSpec)
+        except:
+            self.taskSpec.resource_type = 'Undefined'
 
         # return
         return
@@ -382,6 +401,8 @@ class TaskRefinerBase (object):
                     datasetSpec.setDatasetAttribute('rd')
                 if tmpItem.has_key('reusable'):
                     datasetSpec.setDatasetAttribute('ru')
+                if tmpItem.has_key('indexConsistent'):
+                    datasetSpec.setDatasetAttributeWithLabel('indexConsistent')
                 if tmpItem.has_key('offset'):
                     datasetSpec.setOffset(tmpItem['offset'])
                 if tmpItem.has_key('allowNoOutput'):
@@ -392,12 +413,15 @@ class TaskRefinerBase (object):
                     datasetSpec.setNumRecords(tmpItem['num_records'])
                 if 'transient' in tmpItem:
                     datasetSpec.setTransient(tmpItem['transient'])
+                if 'pseudo' in tmpItem:
+                    datasetSpec.setPseudo()
                 datasetSpec.vo = self.taskSpec.vo
                 datasetSpec.nFiles = 0
                 datasetSpec.nFilesUsed = 0
                 datasetSpec.nFilesFinished = 0
                 datasetSpec.nFilesFailed = 0
                 datasetSpec.nFilesOnHold = 0
+                datasetSpec.nFilesWaiting = 0
                 datasetSpec.nEvents = 0
                 datasetSpec.nEventsUsed = 0
                 datasetSpec.nEventsToBeUsed = 0

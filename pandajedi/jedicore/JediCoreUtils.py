@@ -1,3 +1,4 @@
+import re
 import os
 import copy
 import math
@@ -130,9 +131,32 @@ def percentile(inList,percent,idMap):
     k = (len(inList)-1) * float(percent)/100
     f = math.floor(k)
     c = math.ceil(k)
+    if f == c:
+        retVal = inList[int(f)]
+        return retVal,[retVal]
     val0 = inList[int(f)]
     val1 = inList[int(c)]
     d0 = val0 * (c-k)
     d1 = val1 * (k-f)
     retVal = d0+d1
     return retVal,[val0,val1]
+
+
+
+# get min ram count for job
+def getJobMinRamCount(taskSpec, inputChunk, siteSpec, coreCount):
+    minRamCount = inputChunk.getMaxRamCount()
+    if inputChunk.isMerging:
+        minRamUnit = 'MB'
+    else:
+        minRamUnit = taskSpec.ramUnit
+        if minRamUnit in [None,'','NULL']:
+            minRamUnit   = 'MB'
+        if taskSpec.ramPerCore():
+            minRamCount *= coreCount
+            minRamCount += taskSpec.baseRamCount
+            minRamUnit = re.sub('PerCore.*$', '', minRamUnit)
+    # round up with chunks
+    minRamCount = compensateRamCount(minRamCount)
+    return minRamCount, minRamUnit
+    

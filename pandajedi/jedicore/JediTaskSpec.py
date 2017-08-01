@@ -24,7 +24,7 @@ class JediTaskSpec(object):
         'mergeCoreCount','goal','assessmentTime','cpuTime','cpuTimeUnit',
         'cpuEfficiency','baseWalltime','nucleus','baseRamCount',
         'ttcRequested', 'ttcPredicted', 'ttcPredictionDate','rescueTime',
-        'requestType', 'gshare'
+        'requestType', 'gshare', 'resource_type', 'useJumbo'
         )
     # attributes which have 0 by default
     _zeroAttrs = ()
@@ -52,6 +52,7 @@ class JediTaskSpec(object):
         'firstEvent'         : 'FT',
         'groupBoundaryID'    : 'GB',
         'instantiateTmplSite': 'IA',
+        'inFilePosEvtNum'    : 'IF',
         'allowInputLAN'      : 'IL',
         'ignoreMissingInDS'  : 'IM',
         'ipConnectivity'     : 'IP',
@@ -63,6 +64,7 @@ class JediTaskSpec(object):
         'mergeEsOnOS'        : 'ME',
         'nMaxFilesPerJob'    : 'MF',
         'mergeOutput'        : 'MO',
+        'noExecStrCnv'       : 'NC',
         'nEventsPerJob'      : 'NE',
         'nFilesPerJob'       : 'NF',
         'nGBPerJob'          : 'NG',
@@ -75,6 +77,7 @@ class JediTaskSpec(object):
         'registerDatasets'   : 'RD',
         'respectLB'          : 'RL',
         'reuseSecOnDemand'   : 'RO',
+        'respectSplitRule'   : 'RR',
         'randomSeed'         : 'RS',
         'switchEStoNormal'   : 'SE',
         'stayOutputOnSite'   : 'SO',
@@ -90,7 +93,7 @@ class JediTaskSpec(object):
         'writeInputToFile'   : 'WF',
         'waitInput'          : 'WI',
         'maxAttemptES'       : 'XA',
-        'maxEventRangesPerJob' : 'YE',
+        'maxAttemptEsJob'    : 'XJ',
         'nEventsPerMergeJob'   : 'ZE',
         'nFilesPerMergeJob'    : 'ZF',
         'nGBPerMergeJob'       : 'ZG',
@@ -125,6 +128,10 @@ class JediTaskSpec(object):
     # world cloud name
     worldCloudName = 'WORLD'
 
+    # enum for useJumbo
+    enum_useJumbo = {'waiting': 'W',
+                     'running': 'R',
+                     'disabled': 'D'}
 
 
     # constructor
@@ -143,8 +150,8 @@ class JediTaskSpec(object):
         object.__setattr__(self,'datasetSpecList',[])
 
 
-    # override __setattr__ to collecte the changed attributes
-    def __setattr__(self,name,value):
+    # override __setattr__ to collect the changed attributes
+    def __setattr__(self, name, value):
         oldVal = getattr(self,name)
         object.__setattr__(self,name,value)
         newVal = getattr(self,name)
@@ -294,7 +301,7 @@ class JediTaskSpec(object):
             tmpMatch = re.search(self.splitRuleToken['nMaxFilesPerMergeJob']+'=(\d+)',self.splitRule)
             if tmpMatch != None:
                 return int(tmpMatch.group(1))
-        return None
+        return 50
 
 
 
@@ -308,19 +315,17 @@ class JediTaskSpec(object):
 
 
 
-    # get the max number of event ranges per job if defined
-    def getMaxEventRangesPerJob(self):
-        if self.splitRule != None:
-            tmpMatch = re.search(self.splitRuleToken['maxEventRangesPerJob']+'=(\d+)',self.splitRule)
-            if tmpMatch != None:
-                return int(tmpMatch.group(1))
-        return None
+    # check if using jumbo
+    def usingJumboJobs(self):
+        if self.useJumbo in [None, self.enum_useJumbo['disabled']]:
+            return False
+        return True
 
 
 
     # get the number of jumbo jobs if defined
     def getNumJumboJobs(self):
-        if self.splitRule != None:
+        if self.usingJumboJobs() and self.splitRule != None:
             tmpMatch = re.search(self.splitRuleToken['nJumboJobs']+'=(\d+)',self.splitRule)
             if tmpMatch != None:
                 return int(tmpMatch.group(1))
@@ -1072,6 +1077,16 @@ class JediTaskSpec(object):
 
 
 
+    # respect split rule
+    def respectSplitRule(self):
+        if self.splitRule != None:
+            tmpMatch = re.search(self.splitRuleToken['respectSplitRule']+'=(\d+)',self.splitRule)
+            if tmpMatch != None:
+                return True
+        return False
+
+
+
     # allow partial finish
     def allowPartialFinish(self):
         if self.splitRule != None:
@@ -1104,13 +1119,23 @@ class JediTaskSpec(object):
 
 
 
-    # get the max number of attempts for ES
+    # get the max number of attempts for ES events
     def getMaxAttemptES(self):
         if self.splitRule != None:
             tmpMatch = re.search(self.splitRuleToken['maxAttemptES']+'=(\d+)',self.splitRule)
             if tmpMatch != None:
                 return int(tmpMatch.group(1))
         return None    
+
+
+
+    # get the max number of attempts for ES jobs
+    def getMaxAttemptEsJob(self):
+        if self.splitRule != None:
+            tmpMatch = re.search(self.splitRuleToken['maxAttemptEsJob']+'=(\d+)',self.splitRule)
+            if tmpMatch != None:
+                return int(tmpMatch.group(1))
+        return self.getMaxAttemptES()
 
 
 
@@ -1214,11 +1239,23 @@ class JediTaskSpec(object):
 
     # dynamic number of events
     def dynamicNumEvents(self):
+        if self.getNumEventsPerJob() is not None:
+            return False
         if self.splitRule != None:
             tmpMatch = re.search(self.splitRuleToken['dynamicNumEvents']+'=(\d+)',self.splitRule)
             if tmpMatch != None:
                 return True
         return False
+
+
+
+    # get min granularity for dynamic number of events
+    def get_min_granularity(self):
+        if self.splitRule != None:
+            tmpMatch = re.search(self.splitRuleToken['dynamicNumEvents']+'=(\d+)',self.splitRule)
+            if tmpMatch is not None:
+                return int(tmpMatch.group(1))
+        return None
 
 
 
@@ -1310,3 +1347,22 @@ class JediTaskSpec(object):
                 return True
         return False
 
+
+
+    # suppress execute string conversion
+    def noExecStrCnv(self):
+        if self.splitRule != None:
+            tmpMatch = re.search(self.splitRuleToken['noExecStrCnv']+'=(\d+)',self.splitRule)
+            if tmpMatch != None:
+                return True
+        return False
+
+
+
+    # in-file positional event number
+    def inFilePosEvtNum(self):
+        if self.splitRule != None:
+            tmpMatch = re.search(self.splitRuleToken['inFilePosEvtNum']+'=(\d+)',self.splitRule)
+            if tmpMatch != None:
+                return True
+        return False

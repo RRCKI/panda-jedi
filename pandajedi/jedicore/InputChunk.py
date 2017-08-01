@@ -49,10 +49,12 @@ class InputChunk:
         self.isMerging = False
         # use scout
         self.useScoutFlag = None
-        #memory requirements for the inputChunk
+        # memory requirements for the inputChunk
         self.ramCount = ramCount
-        #flag to set if inputchunk is empty
+        # flag to set if inputchunk is empty
         self.isEmpty = False
+        # flag to use jumbo jobs
+        self.useJumbo = None
 
 
 
@@ -237,6 +239,16 @@ class InputChunk:
 
 
 
+    # get master used index 
+    def getMasterUsedIndex(self):
+        # master is undefined
+        if self.masterIndexName == None:
+            return 0
+        indexVal = self.datasetMap[self.masterIndexName]
+        return indexVal['used']
+
+
+
     # check if secondary datasets use event ratios
     def useEventRatioForSec(self):
         for datasetSpec in self.secondaryDatasetList:
@@ -268,11 +280,16 @@ class InputChunk:
         respectLB = self.taskSpec.respectLumiblock()
         maxAtomSize = 0    
         while True:
+            if not self.isMerging:
+                maxNumFiles = self.taskSpec.getMaxNumFilesPerJob()
+            else:
+                maxNumFiles = self.taskSpec.getMaxNumFilesPerMergeJob()
             # get one subchunk
             subChunk = self.getSubChunk(None,nFilesPerJob=nFilesPerJob,
                                         nEventsPerJob=nEventsPerJob,
                                         useBoundary=useBoundary,
-                                        respectLB=respectLB)
+                                        respectLB=respectLB,
+                                        maxNumFiles=maxNumFiles)
             if subChunk == None:
                 break
             # get size
@@ -433,7 +450,7 @@ class InputChunk:
             primaryHasEvents = False
             for tmpFileSpec in self.masterDataset.Files[datasetUsage['used']:datasetUsage['used']+multiplicand]:
                 # check start event to keep continuity
-                if maxNumEvents != None and tmpFileSpec.startEvent != None:
+                if (maxNumEvents != None or dynNumEvents) and tmpFileSpec.startEvent != None:
                     if nextStartEvent != None and nextStartEvent != tmpFileSpec.startEvent:
                         eventJump = True
                         break
@@ -473,10 +490,14 @@ class InputChunk:
                 # sum
                 inputNumFiles += 1
                 if self.taskSpec.outputScaleWithEvents():
-                    fileSize += long(tmpFileSpec.fsize + sizeGradients * effectiveNumEvents)
+                    fileSize += long(sizeGradients * effectiveNumEvents)
+                    if not dynNumEvents or tmpFileSpec.lfn not in inputFileSet:
+                        fileSize += long(tmpFileSpec.fsize)    
                     outSizeMap[self.masterDataset.datasetID] += long(sizeGradients * effectiveNumEvents)
                 else:
-                    fileSize += long(tmpFileSpec.fsize + sizeGradients * effectiveFsize)
+                    fileSize += long(sizeGradients * effectiveFsize)
+                    if not dynNumEvents or tmpFileSpec.lfn not in inputFileSet:
+                        fileSize += long(tmpFileSpec.fsize)
                     outSizeMap[self.masterDataset.datasetID] += long(sizeGradients * effectiveFsize)
                 if sizeGradientsPerInSize != None:
                     fileSize += long(effectiveFsize * sizeGradientsPerInSize)
@@ -676,10 +697,14 @@ class InputChunk:
                 newNumMaster += 1
                 newInputFileSet.add(tmpFileSpec.lfn)
                 if self.taskSpec.outputScaleWithEvents():
-                    newFileSize += long(tmpFileSpec.fsize + sizeGradients * effectiveNumEvents)
+                    newFileSize += long(sizeGradients * effectiveNumEvents)
+                    if not dynNumEvents or tmpFileSpec.lfn not in inputFileSet:
+                        newFileSize += long(tmpFileSpec.fsize)
                     newOutSizeMap[self.masterDataset.datasetID] += long(sizeGradients * effectiveNumEvents)
                 else:
-                    newFileSize += long(tmpFileSpec.fsize + sizeGradients * effectiveFsize)
+                    newFileSize += long(sizeGradients * effectiveFsize)
+                    if not dynNumEvents or tmpFileSpec.lfn not in inputFileSet:
+                        newFileSize += long(tmpFileSpec.fsize)
                     newOutSizeMap[self.masterDataset.datasetID] += long(sizeGradients * effectiveFsize)
                 if sizeGradientsPerInSize != None:
                     newFileSize += long(effectiveFsize * sizeGradientsPerInSize)
@@ -736,7 +761,8 @@ class InputChunk:
                 break
             # check
             newOutSize = self.getOutSize(newOutSizeMap)
-            if (maxNumFiles != None and ((not dynNumEvents and newInputNumFiles > maxNumFiles) or (dynNumEvents and len(newInputFileSet) > maxNumFiles))) \
+            if (maxNumFiles != None and ((not dynNumEvents and newInputNumFiles > maxNumFiles) \
+                                             or (dynNumEvents and (len(newInputFileSet) > maxNumFiles or newInputNumFiles > maxNumEventRanges)))) \
                     or (maxSize != None and newFileSize > maxSize) \
                     or (maxSize != None and newOutSize < minOutSize and maxSize-minOutSize < newFileSize-newOutSize) \
                     or (maxWalltime > 0 and newExpWalltime > maxWalltime) \
@@ -823,3 +849,8 @@ class InputChunk:
             return max (self.taskSpec.ramCount,self.ramCount)
 
 
+    # get site candidate
+    def getSiteCandidate(self, name):
+        if name in self.siteCandidates:
+            return self.siteCandidates[name]
+        return None

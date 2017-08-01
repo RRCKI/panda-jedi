@@ -113,13 +113,21 @@ class ContentsFeederThread (WorkerThread):
                     taskOnHold = False
                     runningTask = False
                     missingMap = {}
-                    # make logger
-                    tmpLog = MsgWrapper(self.logger,'< jediTaskID={0} >'.format(jediTaskID))
+                    datasetsIdxConsistency = []
+
                     # get task
                     tmpStat,taskSpec = self.taskBufferIF.getTaskWithID_JEDI(jediTaskID,False,True,self.pid,10)
                     if not tmpStat or taskSpec == None:
-                        tmpLog.error('failed to get taskSpec for jediTaskID={0}'.format(jediTaskID))
+                        self.logger.error('failed to get taskSpec for jediTaskID={0}'.format(jediTaskID))
                         continue
+
+                    # make logger
+                    try:
+                        gshare = '_'.join(taskSpec.gshare.split(' '))
+                    except:
+                        gshare = 'Undefined'
+                    tmpLog = MsgWrapper(self.logger,'<jediTaskID={0} gshare={1}>'.format(jediTaskID, gshare))
+
                     try:
                         # get task parameters
                         taskParam = self.taskBufferIF.getTaskParamsWithID_JEDI(jediTaskID)
@@ -132,9 +140,7 @@ class ContentsFeederThread (WorkerThread):
                     if taskParamMap.has_key('nEventsPerInputFile'):
                         taskParamMap['nEventsPerFile'] = taskParamMap['nEventsPerInputFile']
                     # the number of files per job
-                    nFilesPerJob = None
-                    if taskParamMap.has_key('nFilesPerJob'):
-                        nFilesPerJob = taskParamMap['nFilesPerJob']
+                    nFilesPerJob = taskSpec.getNumFilesPerJob()
                     # the number of chunks used by scout 
                     nChunksForScout = 10
                     # load XML
@@ -171,6 +177,9 @@ class ContentsFeederThread (WorkerThread):
                             origNumFiles = taskParamMap['nFiles']
                         for datasetSpec in dsList:
                             tmpLog.debug('start loop for {0}(id={1})'.format(datasetSpec.datasetName,datasetSpec.datasetID))
+                            # index consistency
+                            if datasetSpec.indexConsistent():
+                                datasetsIdxConsistency.append(datasetSpec.datasetID)
                             # get dataset metadata
                             tmpLog.debug('get metadata')
                             gotMetadata = False
@@ -263,8 +272,8 @@ class ContentsFeederThread (WorkerThread):
                                             elif 'nEvents' in taskParamMap and 'nEventsPerJob' in taskParamMap:
                                                 nPFN = taskParamMap['nEvents'] / taskParamMap['nEventsPerJob']
                                             elif 'nEvents' in taskParamMap and 'nEventsPerFile' in taskParamMap \
-                                                    and 'nFilesPerJob' in taskParamMap:
-                                                nPFN = taskParamMap['nEvents'] / taskParamMap['nEventsPerFile'] / taskParamMap['nFilesPerJob']
+                                                    and taskSpec.getNumFilesPerJob() is not None:
+                                                nPFN = taskParamMap['nEvents'] / taskParamMap['nEventsPerFile'] / taskSpec.getNumFilesPerJob()
                                             else:
                                                 # the default number of records for seq_number
                                                 seqDefNumRecords = 10000
@@ -442,7 +451,8 @@ class ContentsFeederThread (WorkerThread):
                                                                                                                               respectLB,
                                                                                                                               tgtNumEventsPerJob,
                                                                                                                               skipFilesUsedBy,
-                                                                                                                              ramCount)
+                                                                                                                              ramCount,
+                                                                                                                              taskSpec)
                                     if retDB == False:
                                         taskSpec.setErrDiag('failed to insert files for {0}. {1}'.format(datasetSpec.datasetName,
                                                                                                          diagMap['errMsg']))
@@ -479,7 +489,7 @@ class ContentsFeederThread (WorkerThread):
                                     if diagMap['isRunningTask']:
                                         runningTask = True
                                     # no activated pending input for noWait
-                                    if noWaitParent and diagMap['nActivatedPending'] == 0 and not (useScout and nChunksForScout == 0) \
+                                    if noWaitParent and diagMap['nActivatedPending'] == 0 and not (useScout and nChunksForScout <= 0) \
                                             and tmpMetadata['state'] != 'closed' and datasetSpec.isMaster():
                                         tmpErrStr = 'insufficient inputs are ready. '
                                         tmpErrStr += diagMap['errMsg']
@@ -498,11 +508,14 @@ class ContentsFeederThread (WorkerThread):
                             taskOnHold = True
                         else:
                             taskBroken = True
+                    # index consistency
+                    if not taskOnHold and not taskBroken and len(datasetsIdxConsistency) > 0:
+                        self.taskBufferIF.removeFilesIndexInconsistent_JEDI(jediTaskID,datasetsIdxConsistency)
                     # update task status
                     if taskBroken:
                         # task is broken
                         taskSpec.status = 'tobroken'
-                        tmpMsg = 'set task.status={0}'.format(taskSpec.status)
+                        tmpMsg = 'set task_status={0}'.format(taskSpec.status)
                         tmpLog.info(tmpMsg)
                         tmpLog.sendMsg(tmpMsg,self.msgType)
                         allRet = self.taskBufferIF.updateTaskStatusByContFeeder_JEDI(jediTaskID,taskSpec,pid=self.pid)
@@ -512,7 +525,7 @@ class ContentsFeederThread (WorkerThread):
                             # go to pending state
                             if not taskSpec.status in ['broken','tobroken']:
                                 taskSpec.setOnHold()
-                            tmpMsg = 'set task.status={0}'.format(taskSpec.status)
+                            tmpMsg = 'set task_status={0}'.format(taskSpec.status)
                             tmpLog.info(tmpMsg)
                             tmpLog.sendMsg(tmpMsg,self.msgType)
                             allRet = self.taskBufferIF.updateTaskStatusByContFeeder_JEDI(jediTaskID,taskSpec,pid=self.pid,setFrozenTime=setFrozenTime)
@@ -520,7 +533,7 @@ class ContentsFeederThread (WorkerThread):
                             # all OK
                             allRet,newTaskStatus = self.taskBufferIF.updateTaskStatusByContFeeder_JEDI(jediTaskID,getTaskStatus=True,pid=self.pid,
                                                                                                        useWorldCloud=taskSpec.useWorldCloud())
-                            tmpMsg = 'set task.status={0}'.format(newTaskStatus)
+                            tmpMsg = 'set task_status={0}'.format(newTaskStatus)
                             tmpLog.info(tmpMsg)
                             tmpLog.sendMsg(tmpMsg,self.msgType)
                         # just unlock

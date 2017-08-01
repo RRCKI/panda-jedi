@@ -1,5 +1,81 @@
 Release Notes
 
+* 7/11/2017
+  * disabled second copy when --destSE
+
+* 7/10/2017
+  * fixed cloneJobs to set correct ramCount for each PQ
+
+* 7/5/2017
+  * getting nTasks and nFiles from config
+
+* 7/3/2017
+  * considering maxNumFiles in getAtom
+  * added AES_NESCONSUMERS and AES_NESCONSUMERS
+  * changed AtlasPJB to skip opportunistic sites for high prio jobs
+  * enabled automatic AES task conversion
+
+* 6/27/2017
+  * added getNumUnprocessedEvents_JEDI
+
+* 6/26/2017
+  * skip scouts for ES
+  * ES without ueRealNumEvt or nEventsPerFile
+  * WQ-GS alignment
+
+* 5/17/2017
+  * changed nRunningCap to ignore highPrioWaiting in AtlasPJT
+
+* 5/12/2017
+  * setting nEsConsumers=1 etc for esFraction
+
+* 5/8/2017
+  * added nSimEvents
+
+* 5/4/2017
+  * fixed AtlasAJB for AtnalysisBase
+  * fixed getAvailableFiles
+
+* 5/3/2017
+  * added JediDBProxyFiltered
+  * added inFilePosEvtNum
+
+* 5/2/2017
+  * changed AtlasPJB for unified PQs
+
+* 4/28/2017
+  * fixed brokerage for git rel
+
+* 4/25/2017
+  * fake co-jumbo
+
+* 4/24/2017
+  * resource_type tagging
+
+* 4/14/2017
+  * added noExecStrCnv
+
+* 4/11/2017
+  * added throttleJobsInPausedTasks
+
+* 4/5/2017
+  * added pseudo output dataset
+
+* 3/27/2017
+  * changed AtlasAPP to extend lifetime of user output datasets
+
+* 3/2/2017
+  * added esFraction
+
+* 2/22/2017
+  * fixed generateBuildJob for nightlies
+  * changed AtlasTS to make duble copy for users
+
+* 2/20/2017
+  * changed AtlasPTB for task.nucleus=satellite
+  * added respectSplitRule
+  * added indexConsistent
+
 * 2/7/2017
   * added DISK_THRESHOLD_xyz in AtlasPTB
 

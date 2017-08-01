@@ -33,7 +33,7 @@ class JediDatasetSpec(object):
         'nFilesFinished','nFilesFailed','nFilesOnHold',
         'nEvents','nEventsToBeUsed','nEventsUsed',
         'lockedBy','lockedTime','attributes','streamName',
-        'storageToken','destination','templateID'
+        'storageToken','destination','templateID','nFilesWaiting'
         )
     # attributes which have 0 by default
     _zeroAttrs = ()
@@ -46,10 +46,12 @@ class JediDatasetSpec(object):
         'allowNoOutput'    : 'an',
         'consistencyCheck' : 'cc',
         'eventRatio'       : 'er',
+        'indexConsistent'  : 'ic',
         'nFilesPerJob'     : 'np',
         'num_records'      : 'nr',
         'offset'           : 'of',
         'objectStore'      : 'os',
+        'pseudo'           : 'ps',
         'random'           : 'rd',
         'reusable'         : 'ru',
         'transient'        : 'tr',
@@ -181,6 +183,19 @@ class JediDatasetSpec(object):
             self.attributes += ','
         self.attributes += attr
 
+
+
+    # set dataset attribute with label
+    def setDatasetAttributeWithLabel(self,label):
+        if label not in self.attrToken:
+            return
+        attr = self.attrToken[label]
+        if self.attributes == None:
+            self.attributes = ''
+        else:
+            self.attributes += ','
+        self.attributes += attr
+
     
 
     # get the total size of files
@@ -300,8 +315,9 @@ class JediDatasetSpec(object):
         if self.datasetName in ['pseudo_dataset','seq_number'] \
                 or self.type in ['pp_input']:
             return True
-        else:
-            return False
+        if self.attributes != None and self.attrToken['pseudo'] in self.attributes.split(','):
+            return True
+        return False
 
 
 
@@ -553,6 +569,15 @@ class JediDatasetSpec(object):
 
 
 
+    # check if index consistency is required
+    def indexConsistent(self):
+        if self.attributes != None and self.attrToken['indexConsistent'] in self.attributes.split(','):
+            return True
+        else:
+            return False
+
+
+
     # set distributed
     def setDistributed(self):
         self.distributed = True
@@ -589,3 +614,15 @@ class JediDatasetSpec(object):
                     except:
                         pass
         return None
+
+
+
+    # set pseudo
+    def setPseudo(self):
+        if self.attributes in [None,'']:
+            items = []
+        else:
+            items = self.attributes.split(',')
+        if not self.attrToken['pseudo'] in items:
+            items.append(self.attrToken['pseudo'])
+            self.attributes = ','.join(items)
