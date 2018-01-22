@@ -9,7 +9,7 @@ import random
 import logging
 import datetime
 import traceback
-import cx_Oracle
+#import cx_Oracle #already in OraDBProxy
 
 from pandajedi.jediconfig import jedi_config
 
@@ -28,6 +28,14 @@ from MsgWrapper import MsgWrapper
 import ParseJobXML
 import JediCoreUtils
 
+if jedi_config.db.backend == 'oracle':
+    import cx_Oracle
+    varNUMBER = cx_Oracle.NUMBER
+else:
+    import MySQLdb
+    varNUMBER = long
+
+import time #__KI Ruslan: to make sleep before lockTask
 
 # logger
 from pandacommon.pandalogger.PandaLogger import PandaLogger
@@ -57,14 +65,12 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
 
 
     # connect to DB (just for INTR)
-    def connect(self,dbhost=jedi_config.db.dbhost,dbpasswd=jedi_config.db.dbpasswd,
+    def connect_(self,dbhost=jedi_config.db.dbhost,dbpasswd=jedi_config.db.dbpasswd,
                 dbuser=jedi_config.db.dbuser,dbname=jedi_config.db.dbname,
                 dbtimeout=None,reconnect=False):
         return taskbuffer.OraDBProxy.DBProxy.connect(self,dbhost=dbhost,dbpasswd=dbpasswd,
                                                      dbuser=dbuser,dbname=dbname,
                                                      dbtimeout=dbtimeout,reconnect=reconnect)
-
-
 
     # extract method name from comment
     def getMethodName(self,comment):
@@ -82,6 +88,17 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
         oraErrCode = str(errValue).split()[0]
         oraErrCode = oraErrCode[:-1]
         if oraErrCode == 'ORA-00054':
+            return True
+        return False
+
+
+
+    # __KI 
+    # check if exception is from NOWAIT
+    def isNoWaitExceptionMySQL(self,errValue):
+        dbErrCode = str(errValue).split()[1] # suppoused to be ERROR 1205 (HY000): Lock wait timeout exceeded; try restarting transaction
+        #dbErrCode = oraErrCode[:-1]
+        if dbErrCode == '1205':
             return True
         return False
 
@@ -110,7 +127,16 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
         self.refreshWorkQueueMap()
         return self.workQueueMap
 
-    
+
+   
+    # return 1 if DB backend is mysql; 0 otherwise (if Oracle)
+    def checkDbType(self):
+        if jedi_config.db.backend == 'mysql':
+            return 1
+        else:
+            return 0
+ 
+
 
     # refresh work queue map
     def refreshWorkQueueMap(self):
@@ -213,7 +239,9 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
             returnMap = {}
             taskDatasetMap = {}
             nDS = 0
+            tmpLog.debug('SLQ1')
             for res in resList:
+                tmpLog.debug('SLQ1 '+str(res))
                 datasetSpec = JediDatasetSpec()
                 datasetSpec.pack(res)
                 if not returnMap.has_key(datasetSpec.jediTaskID):
@@ -223,6 +251,7 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                 if not datasetSpec.jediTaskID in taskDatasetMap:
                     taskDatasetMap[datasetSpec.jediTaskID] = []
                 taskDatasetMap[datasetSpec.jediTaskID].append(datasetSpec.datasetID)
+            tmpLog.debug('SLQ1 '+str("".join(str(returnMap.keys()))))
             jediTaskIDs = returnMap.keys()
             jediTaskIDs.sort()
             # get seq_number
@@ -611,8 +640,15 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
             sqlIn  = "INSERT INTO {0}.JEDI_Dataset_Contents ({1}) ".format(jedi_config.db.schemaJEDI,JediFileSpec.columnNames())
             sqlIn += JediFileSpec.bindValuesExpression(useSeq=False)
             # sql to get fileID
-            sqlFID  = "SELECT {0}.JEDI_DATASET_CONT_FILEID_SEQ.nextval FROM ".format(jedi_config.db.schemaJEDI)
-            sqlFID += "(SELECT level FROM dual CONNECT BY level<=:nIDs) " 
+            dbcfg=self.checkDbType()
+            if not dbcfg:
+                sqlFID  = "SELECT {0}.JEDI_DATASET_CONT_FILEID_SEQ.nextval FROM ".format(jedi_config.db.schemaJEDI)
+                sqlFID += "(SELECT level FROM dual CONNECT BY level<=:nIDs) " 
+            else:
+                #__KI we use aux table 'mysql_levels' wich contains simple N values v of '1'.
+                # So we will use join on it with LIMIT=N_of_levels. 
+                # And there will be error, if there is not so many N in table.
+                sqlFID  = "SELECT {0}.JEDI_DATASET_CONT_FILEID_SEQ.nextval FROM {0}.MYSQL_LEVELS LIMIT :nIDs".format(jedi_config.db.schemaJEDI)
             # sql to update file status
             sqlFU  = "UPDATE {0}.JEDI_Dataset_Contents SET status=:status ".format(jedi_config.db.schemaJEDI)
             sqlFU += "WHERE jediTaskID=:jediTaskID AND datasetID=:datasetID AND fileID=:fileID "
@@ -848,8 +884,9 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                             varMap[':nIDs'] = nInsert
                             self.cur.execute(sqlFID,varMap)
                             resFID = self.cur.fetchall()
-                            for fileID, in resFID:
-                                newFileIDs.append(fileID)
+                            for fileID in resFID:
+                                #tmpLog.debug('__get new fileID '+str(fileID))
+                                newFileIDs.append(fileID[0])
                         if isMutableDataset:
                             pendingFID += newFileIDs
                         # sort fileID
@@ -863,6 +900,7 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                             # make vars
                             varMap = fileSpec.valuesMap()
                             varMaps.append(varMap)
+                            tmpLog.debug('__bulk insert_fileID='+ str(fileID)) #,fileSpec))
                         # bulk insert
                         tmpLog.debug('bulk insert {0} files'.format(len(varMaps)))
                         self.cur.executemany(sqlIn+comment,varMaps)
@@ -1175,7 +1213,7 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
             sql += JediDatasetSpec.bindValuesExpression()
             sql += " RETURNING datasetID INTO :newDatasetID"
             varMap = datasetSpec.valuesMap(useSeq=True)
-            varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)            
+            varMap[':newDatasetID'] = self.cur.var(varNUMBER)            
             # begin transaction
             self.conn.begin()
             # insert dataset
@@ -1184,7 +1222,11 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
             if not self._commit():
                 raise RuntimeError, 'Commit error'
             tmpLog.debug('done')
-            return True,long(varMap[':newDatasetID'].getvalue())
+            try:
+                retval=long(varMap[':newDatasetID'].getvalue())
+            except AttributeError:
+                long(varMap[':newDatasetID'])
+            return True,retval
         except:
             # roll back
             self._rollback()
@@ -1881,7 +1923,10 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                         self.cur.execute(sqlJobP+comment,varMap)
                         for clobJobP, in self.cur:
                             if clobJobP != None:
-                                jobParamsTemplate = clobJobP.read()
+                                try:
+                                    jobParamsTemplate = clobJobP.read()
+                                except:
+                                    jobParamsTemplate = str(clobJobP)
                                 break
                     if lockTask:
                         varMap = {}
@@ -2555,9 +2600,12 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                             cDatasetSpec.creationTime     = timeNow
                             cDatasetSpec.modificationTime = timeNow
                             varMap = cDatasetSpec.valuesMap(useSeq=True)
-                            varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)
+                            varMap[':newDatasetID'] = self.cur.var(varNUMBER)
                             self.cur.execute(sqlT2+comment,varMap)
-                            fileDatasetID = long(varMap[':newDatasetID'].getvalue())
+                            try:
+                                fileDatasetID = long(varMap[':newDatasetID'].getvalue())
+                            except AttributeError:
+                                fileDatasetID = long(varMap[':newDatasetID'])
                             if instantiatedSite != None:
                                 # set concreate name
                                 cDatasetSpec.site = instantiatedSite
@@ -2641,9 +2689,12 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                                     indexFileID += 1
                                 else:
                                     varMap = fileSpec.valuesMap(useSeq=True)
-                                    varMap[':newFileID'] = self.cur.var(cx_Oracle.NUMBER)
+                                    varMap[':newFileID'] = self.cur.var(varNUMBER)
                                     self.cur.execute(sqlI+comment,varMap)
-                                    fileSpec.fileID = long(varMap[':newFileID'].getvalue())
+                                    try:
+                                        fileSpec.fileID = long(varMap[':newFileID'].getvalue())
+                                    except AttributeError:
+                                        fileSpec.fileID = long(varMap[':newFileID'])
                                 # increment SN
                                 varMap = {}
                                 varMap[':jediTaskID'] = jediTaskID
@@ -2870,7 +2921,7 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                     sql  = "SELECT tabT.jediTaskID,datasetID,currentPriority,nFilesToBeUsed,tabD.type,tabT.status,"
                     sql += "tabT.{0},nFiles,nEvents,nFilesWaiting,tabT.useJumbo ".format(attrNameForGroupBy)
                 sql += "FROM {0}.JEDI_Tasks tabT,{1}.JEDI_Datasets tabD ".format(jedi_config.db.schemaJEDI,
-                                                                                 jedi_config.db.schemaJEDI)
+                                                                                     jedi_config.db.schemaJEDI)
                 sql += "WHERE tabT.jediTaskID=tabD.jediTaskID AND tabT.jediTaskID IN ("
                 for tmpTaskIdx, tmpTaskID in enumerate(simTasks):
                     tmpKey = ':jediTaskID{0}'.format(tmpTaskIdx)
@@ -3402,7 +3453,10 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                             self.cur.execute(sqlJobP + comment, varMap)
                             for clobJobP, in self.cur:
                                 if clobJobP != None:
-                                    taskSpec.jobParamsTemplate = clobJobP.read()
+                                    try:
+                                        taskSpec.jobParamsTemplate = clobJobP.read()
+                                    except:
+                                        taskSpec.jobParamsTemplate = str(clobJobP)
                                 break
                             # typical number of files
                             typicalNumFilesPerJob = 5
@@ -3617,11 +3671,15 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                                         varMap[':datasetID'] = datasetID
                                         varMap[':nFilesUsed'] = nFilesUsed
                                         varMap[':nFilesWaiting'] = tmpDatasetSpec.nFilesWaiting
-                                        varMap[':newnFilesUsed'] = self.cur.var(cx_Oracle.NUMBER)
-                                        varMap[':newnFilesTobeUsed'] = self.cur.var(cx_Oracle.NUMBER)
+                                        varMap[':newnFilesUsed'] = self.cur.var(varNUMBER)
+                                        varMap[':newnFilesTobeUsed'] = self.cur.var(varNUMBER)
                                         self.cur.execute(sqlDU + comment, varMap)
-                                        newnFilesUsed = long(varMap[':newnFilesUsed'].getvalue())
-                                        newnFilesTobeUsed = long(varMap[':newnFilesTobeUsed'].getvalue())
+                                        try:
+                                            newnFilesUsed = long(varMap[':newnFilesUsed'].getvalue())
+                                            newnFilesTobeUsed = long(varMap[':newnFilesTobeUsed'].getvalue())
+                                        except AttributeError:
+                                            newnFilesUsed = long(varMap[':newnFilesUsed'])
+                                            newnFilesTobeUsed = long(varMap[':newnFilesTobeUsed'])
                                     tmpLog.debug(
                                         'jediTaskID={2} datasetID={0} has {1} files to be processed for ramCount={3}'.format(
                                             datasetID, iFiles_tmp,
@@ -3768,9 +3826,12 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
             if parent_tid != None:
                 varMap[':parent_tid']  = parent_tid
             varMap[':prodSourceLabel'] = prodSourceLabel
-            varMap[':jediTaskID'] = self.cur.var(cx_Oracle.NUMBER)
+            varMap[':jediTaskID'] = self.cur.var(varNUMBER)
             self.cur.execute(sqlT+comment,varMap)
-            jediTaskID = long(varMap[':jediTaskID'].getvalue())
+            try:
+                jediTaskID = long(varMap[':jediTaskID'].getvalue())
+            except AttributeError:
+                jediTaskID = long(varMap[':jediTaskID'])
             # commit
             if not self._commit():
                 raise RuntimeError, 'Commit error'
@@ -3813,9 +3874,12 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                 varMap[':status'] = 'waiting'
                 varMap[':parent_tid'] = jediTaskID
                 varMap[':prodSourceLabel'] = prodSourceLabel
-                varMap[':jediTaskID'] = self.cur.var(cx_Oracle.NUMBER)
+                varMap[':jediTaskID'] = self.cur.var(varNUMBER)
                 self.cur.execute(sqlIT+comment,varMap)
-                newJediTaskID = long(varMap[':jediTaskID'].getvalue())
+                try:
+                    newJediTaskID = long(varMap[':jediTaskID'].getvalue())
+                except AttributeError:
+                    newJediTaskID = long(varMap[':jediTaskID'])
                 newJediTaskIDs.append(newJediTaskID)
             # update task parameters
             varMap = {}
@@ -4377,20 +4441,60 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
         methodName += ' vo={0} label={1} queue={2}'.format(vo,prodSourceLabel,workQueue.queue_name)
         tmpLog = MsgWrapper(logger,methodName)
         tmpLog.debug('start')
+        dbcfg=self.checkDbType()
         try:
             # sql to get size
             varMap = {}
             varMap[':vo'] = vo
             varMap[':prodSourceLabel'] = prodSourceLabel
-            sql  = "SELECT MEDIAN(nInputDataFiles),processingType FROM {0}.jobsActive4 ".format(jedi_config.db.schemaPANDA)
-            sql += "WHERE prodSourceLabel=:prodSourceLabel and vo=:vo "
-            if workQueue.is_global_share:
+            if not dbcfg:
+              sql  = "SELECT MEDIAN(nInputDataFiles),processingType FROM {0}.jobsActive4 ".format(jedi_config.db.schemaPANDA)
+              sql += "WHERE prodSourceLabel=:prodSourceLabel and vo=:vo "
+              if workQueue.is_global_share:
                 sql += "AND gshare=:wq_name "
                 sql += "AND workqueue_id NOT IN (SELECT queue_id FROM atlas_panda.jedi_work_queue WHERE queue_function = 'Resource') "
                 varMap[':wq_name'] = workQueue.queue_name
-            else:
+              else:
                 sql += "AND workQueue_ID=:wq_id "
                 varMap[':wq_id'] = workQueue.queue_id
+            else:
+              slqval='nInputDataFiles'
+              sql  = "SELECT AVG(t1."+slqval+") as MEDIAN,processingType FROM ("
+              sql += "SELECT @rnum:=@rnum+1 as `row_number`, d."+slqval+",processingType "
+              sql += "FROM {0}.jobsActive4 AS d,".format(jedi_config.db.schemaPANDA)
+              sql += "(SELECT @rnum:=0) r "
+              sql += "WHERE prodSourceLabel=:prodSourceLabel and vo=:vo "
+              if workQueue.is_global_share:
+                sql += "AND gshare=:wq_name "
+                sql += "AND workqueue_id NOT IN (SELECT queue_id FROM atlas_panda.jedi_work_queue WHERE queue_function = 'Resource') "
+                varMap[':wq_name'] = workQueue.queue_name
+              else:
+                sql += "AND workQueue_ID=:wq_id "
+                varMap[':wq_id'] = workQueue.queue_id
+              sql += "ORDER BY d."+slqval
+              sql += ") AS t1,"
+              sql += "( SELECT count(*) as t_rows FROM {0}.jobsActive4 AS d ".format(jedi_config.db.schemaPANDA)
+              
+              sql += "WHERE prodSourceLabel=:prodSourceLabel and vo=:vo "
+              if workQueue.is_global_share:
+                sql += "AND gshare=:wq_name "
+                sql += "AND workqueue_id NOT IN (SELECT queue_id FROM atlas_panda.jedi_work_queue WHERE queue_function = 'Resource') "
+                #varMap[':wq_name'] = workQueue.queue_name
+              else:
+                sql += "AND workQueue_ID=:wq_id "
+                #varMap[':wq_id'] = workQueue.queue_id
+
+              sql += ") AS t2 "
+             #with the same WHERE clause here (as in solution) will not work. So removed it.
+             # sql += "WHERE prodSourceLabel=:prodSourceLabel and vo=:vo "
+             # if workQueue.is_global_share:
+             #   sql += "AND gshare=:wq_name "
+             #   sql += "AND workqueue_id NOT IN (SELECT queue_id FROM atlas_panda.jedi_work_queue WHERE queue_function = 'Resource') "
+             # else:
+             #   sql += "AND workQueue_ID=:wq_id "
+             # sql += "AND t1.row_number IN (floor((t_rows+1)/2), floor((t_rows+2)/2) ) " 
+
+              sql += "WHERE t1.row_number IN (floor((t_rows+1)/2), floor((t_rows+2)/2) ) "
             sql += "GROUP BY processingType "
             # begin transaction
             self.conn.begin()
@@ -4712,7 +4816,10 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                             self.cur.execute(sqlCopy+comment,varMap)
                             retStr = ''
                             for tmpItem, in self.cur:
-                                retStr = tmpItem.read(amount=5000000)
+                                try:
+                                    retStr = tmpItem.read(amount=5000000)
+                                except:
+                                    retStr = str(tmpItem)
                                 break
                             # check size
                             if len(retStr) != totalSize:
@@ -4804,6 +4911,7 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
         methodName += ' <jediTaskID={0}>'.format(jediTaskID)
         tmpLog = MsgWrapper(logger,methodName)
         tmpLog.debug('start')
+        dbcfg=self.checkDbType()
         try:
             # sql
             sql  = "SELECT taskParams FROM {0}.JEDI_TaskParams WHERE jediTaskID=:jediTaskID ".format(jedi_config.db.schemaJEDI)
@@ -4816,8 +4924,12 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
             retStr = ''
             totalSize = 0
             for tmpItem, in self.cur:
-                retStr = tmpItem.read(amount=1000000)
-                totalSize += tmpItem.size()
+                if not dbcfg:
+                    retStr = tmpItem.read(amount=1000000)
+                    totalSize += tmpItem.size()
+                else:
+                    retStr = tmpItem
+                    totalSize += len(tmpItem)
                 break
             # commit
             if not self._commit():
@@ -4831,7 +4943,19 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
             self.dumpErrorMessage(tmpLog)
             return None
 
-
+    # query for curval if MySQL (panda_jedi_cfg.backend=='mysql'). 
+    # Is it here in right place or should be in DB_wrapper? 
+    def mysql4curval(): #__KI: useless.
+        curv=None
+        sql_curval = "SELECT  {0}.curval('JEDI_DATASETS_ID_SEQ')".format(jedi_config.db.schemaJEDI)
+        try:
+            self.cur.execute(sql_curval + comment)
+            res = self.cur.fetchone()
+            if res != None:
+                curv, = res
+        except:
+            raise Exception("Error in MySQL sequences for JEDI_DATASETS")
+        return curv
 
     # register task/dataset/templ/param in a single transaction
     def registerTaskInOneShot_JEDI(self,jediTaskID,taskSpec,inMasterDatasetSpecList,
@@ -4910,10 +5034,7 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                 sqlI  = "INSERT INTO {0}.JEDI_Dataset_Contents ({1}) ".format(jedi_config.db.schemaJEDI,
                                                                               JediFileSpec.columnNames())
                 sqlI += JediFileSpec.bindValuesExpression()
-
-                # query for curval if MySQL
-                sql_curval = "SELECT  {0}.curval('JEDI_DATASETS_ID_SEQ')".format(jedi_config.db.schemaJEDI)
-
+                # insert master dataset
                 masterID = -1
                 datasetIdMap = {}
                 for datasetSpec in inMasterDatasetSpecList:
@@ -4921,20 +5042,20 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                         datasetSpec.creationTime = timeNow
                         datasetSpec.modificationTime = timeNow
                         varMap = datasetSpec.valuesMap(useSeq=True)
-                        varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)            
+                        varMap[':newDatasetID'] = self.cur.var(varNUMBER)            
                         # insert dataset
                         self.cur.execute(sql+comment,varMap)
 
                         # get curval from sequence if MySQL
-                        if panda_config.backend == 'mysql':
-                            self.cur.execute(sql_curval+comment)
-                            res=self.cur.fetchone()
-                            if res != None:
-                                datasetID, =res
-                        else:
-                            datasetID = long(varMap[':newDatasetID'].getvalue())
+                        #if jedi_config.backend == 'mysql':
+                        #    datasetID = mysql4curval()
+                        #else:
+                        #   datasetID = long(varMap[':newDatasetID'].getvalue())
 
-                        #datasetID = long(varMap[':newDatasetID'].getvalue())
+                        try:
+                            datasetID = long(varMap[':newDatasetID'].getvalue())
+                        except AttributeError:
+                            datasetID = long(varMap[':newDatasetID'])
                         masterID = datasetID
                         datasetIdMap[datasetSpec.uniqueMapKey()] = datasetID
                         datasetSpec.datasetID = datasetID
@@ -4950,20 +5071,20 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                         datasetSpec.modificationTime = timeNow
                         datasetSpec.masterID = masterID
                         varMap = datasetSpec.valuesMap(useSeq=True)
-                        varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)            
+                        varMap[':newDatasetID'] = self.cur.var(varNUMBER)            
                         # insert dataset
                         self.cur.execute(sql+comment,varMap)
 
                         # get curval from sequence if MySQL
-                        if panda_config.backend == 'mysql':
-                            self.cur.execute(sql_curval+comment)
-                            res=self.cur.fetchone()
-                            if res != None:
-                                datasetID, =res
-                        else:
-                            datasetID = long(varMap[':newDatasetID'].getvalue())
+                        #if jedi_config.backend == 'mysql':
+                        #    datasetID = mysql4curval()
+                        #else:
+                        #    datasetID = long(varMap[':newDatasetID'].getvalue())
 
-                        #datasetID = long(varMap[':newDatasetID'].getvalue())
+                        try:
+                            datasetID = long(varMap[':newDatasetID'].getvalue())
+                        except AttributeError:
+                            datasetID = long(varMap[':newDatasetID'])
                         datasetIdMap[datasetSpec.uniqueMapKey()] = datasetID
                         datasetSpec.datasetID = datasetID
                         # insert files
@@ -4978,20 +5099,20 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                     datasetSpec.creationTime = timeNow
                     datasetSpec.modificationTime = timeNow
                     varMap = datasetSpec.valuesMap(useSeq=True)
-                    varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)            
+                    varMap[':newDatasetID'] = self.cur.var(varNUMBER)            
                     # insert dataset
                     self.cur.execute(sql+comment,varMap)
 
                     # get curval from sequence if MySQL
-                    if panda_config.backend == 'mysql':
-                        self.cur.execute(sql_curval + comment)
-                        res = self.cur.fetchone()
-                        if res != None:
-                            datasetID, = res
-                    else:
-                        datasetID = long(varMap[':newDatasetID'].getvalue())
+                    #if jedi_config.backend == 'mysql':
+                    #    datasetID = mysql4curval()
+                    #else:
+                    #    datasetID = long(varMap[':newDatasetID'].getvalue())
 
-                    #datasetID = long(varMap[':newDatasetID'].getvalue())
+                    try:
+                        datasetID = long(varMap[':newDatasetID'].getvalue())
+                    except AttributeError:
+                        datasetID = long(varMap[':newDatasetID'])
                     datasetIdMap[datasetSpec.outputMapKey()] = datasetID
                     datasetSpec.datasetID = datasetID
                     unmergeMasterID = datasetID
@@ -5001,20 +5122,20 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                     datasetSpec.modificationTime = timeNow
                     datasetSpec.masterID = unmergeMasterID
                     varMap = datasetSpec.valuesMap(useSeq=True)
-                    varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)            
+                    varMap[':newDatasetID'] = self.cur.var(varNUMBER)            
                     # insert dataset
                     self.cur.execute(sql+comment,varMap)
 
                     # get curval from sequence if MySQL
-                    if panda_config.backend == 'mysql':
-                        self.cur.execute(sql_curval + comment)
-                        res = self.cur.fetchone()
-                        if res != None:
-                            datasetID, = res
-                    else:
-                        datasetID = long(varMap[':newDatasetID'].getvalue())
+                    #if jedi_config.backend == 'mysql':
+                    #    datasetID = mysql4curval()
+                    #else:
+                    #    datasetID = long(varMap[':newDatasetID'].getvalue())
 
-                    #datasetID = long(varMap[':newDatasetID'].getvalue())
+                    try:
+                        datasetID = long(varMap[':newDatasetID'].getvalue())
+                    except AttributeError:
+                        datasetID = long(varMap[':newDatasetID'])
                     datasetIdMap[datasetSpec.outputMapKey()] = datasetID
                     datasetSpec.datasetID = datasetID
                 # insert output datasets
@@ -5029,20 +5150,20 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                     elif unmergeDatasetSpecMap.has_key(datasetSpec.outputMapKey()):
                         datasetSpec.provenanceID = unmergeDatasetSpecMap[datasetSpec.outputMapKey()].datasetID
                     varMap = datasetSpec.valuesMap(useSeq=True)
-                    varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)            
+                    varMap[':newDatasetID'] = self.cur.var(varNUMBER)            
                     # insert dataset
                     self.cur.execute(sql+comment,varMap)
 
                     # get curval from sequence if MySQL
-                    if panda_config.backend == 'mysql':
-                        self.cur.execute(sql_curval + comment)
-                        res = self.cur.fetchone()
-                        if res != None:
-                            datasetID, = res
-                    else:
-                        datasetID = long(varMap[':newDatasetID'].getvalue())
+                    #if jedi_config.backend == 'mysql':
+                    #    datasetID = mysql4curval()
+                    #else:
+                    #    datasetID = long(varMap[':newDatasetID'].getvalue())
 
-                    #datasetID = long(varMap[':newDatasetID'].getvalue())
+                    try:
+                        datasetID = long(varMap[':newDatasetID'].getvalue())
+                    except AttributeError:
+                        datasetID = long(varMap[':newDatasetID'])
                     datasetIdMap[outputMapKey] = datasetID
                     datasetSpec.datasetID = datasetID
                 # insert outputTemplates
@@ -6550,6 +6671,7 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
             methodName += ' <vo={0} label={1} queue={2} prio={3}>'.format(vo,prodSourceLabel,workQueue.queue_name,priority)
         tmpLog = MsgWrapper(logger,methodName)
         tmpLog.debug('start')
+        dbcfg=self.checkDbType()
         try:
             # sql to get RW
             varMap = {}
@@ -6558,7 +6680,11 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
             varMap[':worldCloud'] = JediTaskSpec.worldCloudName
             if priority != None:
                 varMap[':priority'] = priority
-            sql  = "SELECT tabT.nucleus,SUM((nEvents-nEventsUsed)*DECODE(cpuTime,NULL,300,cpuTime)) "
+            #sql  = "SELECT tabT.nucleus,SUM((nEvents-nEventsUsed)*DECODE(cpuTime,NULL,300,cpuTime)) "
+            if not dbcfg:
+                sql  = "SELECT tabT.nucleus,SUM((nEvents-nEventsUsed)*DECODE(cpuTime,NULL,300,cpuTime)) "
+            else:
+                sql  = "SELECT tabT.nucleus,SUM((nEvents-nEventsUsed)*(CASE cpuTime WHEN NULL THEN 300 ELSE cpuTime))"
             sql += "FROM {0}.JEDI_Tasks tabT,{0}.JEDI_Datasets tabD,{0}.JEDI_AUX_Status_MinTaskID tabA ".format(jedi_config.db.schemaJEDI)
             sql += "WHERE tabT.status=tabA.status AND tabT.jediTaskID>=tabA.min_jediTaskID "
             sql += "AND tabT.jediTaskID=tabD.jediTaskID AND masterID IS NULL "
@@ -6623,9 +6749,13 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
         methodName += ' <jediTaskID={0}>'.format(jediTaskID)
         tmpLog = MsgWrapper(logger,methodName)
         tmpLog.debug('start')
+        dbcfg=self.checkDbType()
         try:
             # sql to get RW
-            sql  = "SELECT (nEvents-nEventsUsed)*DECODE(cpuTime,NULL,300,cpuTime) "
+            if not dbcfg:
+                sql  = "SELECT (nEvents-nEventsUsed)*DECODE(cpuTime,NULL,300,cpuTime) "
+            else:
+                sql  = "SELECT (nEvents-nEventsUsed)*(CASE cpuTime WHEN NULL THEN 300 ELSE cpuTime) "
             sql += "FROM {0}.JEDI_Tasks tabT,{0}.JEDI_Datasets tabD ".format(jedi_config.db.schemaJEDI)
             sql += "WHERE tabT.jediTaskID=tabD.jediTaskID AND masterID IS NULL "
             sql += "AND tabT.jediTaskID=:jediTaskID "
@@ -6917,7 +7047,10 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                     tmpComComment = None
                     for clobCC, in self.cur:
                         if clobCC != None:
-                            tmpComComment = clobCC.read()
+                            try:
+                                tmpComComment = clobCC.read()
+                            except:
+                                tmpComComment = str(clobCC)
                         break
                     if not tmpComComment in ['',None]:
                         retTaskIDs[jediTaskID]['comment'] = tmpComComment
@@ -7819,13 +7952,16 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
             # start transaction
             self.conn.begin()
             varMap = datasetSpec.valuesMap(useSeq=True)
-            varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)
+            varMap[':newDatasetID'] = self.cur.var(varNUMBER)
             # insert dataset
             if reusedDatasetID != None:
                 datasetID = reusedDatasetID
             elif not simul:
                 self.cur.execute(sqlDS+comment,varMap)
-                datasetID = long(varMap[':newDatasetID'].getvalue())
+                try:
+                    datasetID = long(varMap[':newDatasetID'].getvalue())
+                except AttributeError:
+                    datasetID = long(varMap[':newDatasetID'])
             else:
                 datasetID = 0
             # insert files
@@ -7833,10 +7969,13 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
             for fileSpec,pandaFileSpec in fileSpecList:
                 fileSpec.datasetID = datasetID
                 varMap = fileSpec.valuesMap(useSeq=True)
-                varMap[':newFileID'] = self.cur.var(cx_Oracle.NUMBER)
+                varMap[':newFileID'] = self.cur.var(varNUMBER)
                 if not simul:
                     self.cur.execute(sqlFI+comment,varMap)
-                    fileID = long(varMap[':newFileID'].getvalue())
+                    try:
+                        fileID = long(varMap[':newFileID'].getvalue())
+                    except AttributeError:
+                        fileID = long(varMap[':newFileID'])
                 else:
                     fileID = 0
                 # change placeholder in filename
@@ -7999,9 +8138,12 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                     tmpFileSpec.firstEvent   = maxRndSeed
                     if not simul:
                         varMap = tmpFileSpec.valuesMap(useSeq=True)
-                        varMap[':newFileID'] = self.cur.var(cx_Oracle.NUMBER)
+                        varMap[':newFileID'] = self.cur.var(varNUMBER)
                         self.cur.execute(sqlFI+comment,varMap)
-                        tmpFileSpec.fileID = long(varMap[':newFileID'].getvalue())
+                        try:
+                            tmpFileSpec.fileID = long(varMap[':newFileID'].getvalue())
+                        except AttributeError:
+                            tmpFileSpec.fileID = long(varMap[':newFileID'])
                         tmpLog.debug('insert fileID={0} datasetID={1} rndmSeed={2}'.format(tmpFileSpec.fileID,
                                                                                            tmpFileSpec.datasetID,
                                                                                            tmpFileSpec.firstEvent))
@@ -8074,7 +8216,10 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                     varMap[':pandaID'] = pandaID
                     self.cur.execute(sqlSCD+comment,varMap)
                     for clobMeta, in self.cur:
-                        metaData = clobMeta.read()
+                        try:
+                            metaData = clobMeta.read()
+                        except:
+                            metaData = str(clobMeta)
                         break
                     if metaData == None:
                         tmpLog.error('no metaData for PandaID={0}'.format(pandaID))
@@ -8143,9 +8288,12 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                                                                          datasetSpec.nFiles)
                 if not simul:
                     varMap = tmpFileSpec.valuesMap(useSeq=True)
-                    varMap[':newFileID'] = self.cur.var(cx_Oracle.NUMBER)
+                    varMap[':newFileID'] = self.cur.var(varNUMBER)
                     self.cur.execute(sqlFI+comment,varMap)
-                    tmpFileSpec.fileID = long(varMap[':newFileID'].getvalue())
+                    try:
+                        tmpFileSpec.fileID = long(varMap[':newFileID'].getvalue())
+                    except AttributeError:
+                        tmpFileSpec.fileID = long(varMap[':newFileID'])
                     # increment nFiles
                     varMap = {}
                     varMap[':jediTaskID'] = jediTaskID
@@ -8597,10 +8745,13 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                         datasetSpec.creationTime = timeNow
                         datasetSpec.modificationTime = timeNow
                         varMap = datasetSpec.valuesMap(useSeq=True)
-                        varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)            
+                        varMap[':newDatasetID'] = self.cur.var(varNUMBER)            
                         # insert dataset
                         self.cur.execute(sqlID+comment,varMap)
-                        datasetID = long(varMap[':newDatasetID'].getvalue())
+                        try:
+                            datasetID = long(varMap[':newDatasetID'].getvalue())
+                        except AttributeError:
+                            datasetID = long(varMap[':newDatasetID'])
                         masterID = datasetID
                         datasetSpec.datasetID = datasetID
                         # insert secondary datasets
@@ -8609,10 +8760,13 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
                             datasetSpec.modificationTime = timeNow
                             datasetSpec.masterID = masterID
                             varMap = datasetSpec.valuesMap(useSeq=True)
-                            varMap[':newDatasetID'] = self.cur.var(cx_Oracle.NUMBER)            
+                            varMap[':newDatasetID'] = self.cur.var(varNUMBER)            
                             # insert dataset
                             self.cur.execute(sqlID+comment,varMap)
-                            datasetID = long(varMap[':newDatasetID'].getvalue())
+                            try:
+                                datasetID = long(varMap[':newDatasetID'].getvalue())
+                            except AttributeError:
+                                datasetID = long(varMap[':newDatasetID'])
                             datasetSpec.datasetID = datasetID
                         goDefined = True
                     # update task
@@ -9279,7 +9433,7 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
         comment = ' /* JediDBProxy.lockTask_JEDI */'
 
         # 2 sec sleep for MySQL as the timestamps are in seconds2 sec sleep for MySQL as the timestamps are in seconds
-        if panda_config.backend == 'mysql':
+        if jedi_config.db.backend == 'mysql':
             time.sleep(2)
 
         methodName = self.getMethodName(comment)
@@ -10168,10 +10322,14 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
         methodName += ' <vo={0} label={1} queue={2} cloud={3}>'.format(vo, prodSourceLabel, workQueue.queue_name, cloud)
         tmpLog = MsgWrapper(logger,methodName)
         tmpLog.debug('start')
+        dbcfg=self.checkDbType()
         try:
             # sql
             varMap = {}
-            sql  = "SELECT SUM(NVL2(maxWalltime,maxWalltime,0)),SUM(NVL2(maxWalltime,1,0)),SUM(NVL2(maxWalltime,0,1)) "
+            if not dbcfg:
+                sql  = "SELECT SUM(NVL2(maxWalltime,maxWalltime,0)),SUM(NVL2(maxWalltime,1,0)),SUM(NVL2(maxWalltime,0,1)) "
+            else:
+                sql  = "SELECT SUM(IF (maxWalltime IS NULL ,maxWalltime,0)),SUM(IF (maxWalltime IS NULL ,1,0)),SUM( IF (maxWalltime IS NULL,0,1)) "
             sql += "FROM {0}.".format(jedi_config.db.schemaPANDA) + "{0} "
             sql += "WHERE vo=:vo AND prodSourceLabel=:prodSourceLabel "
             if cloud != None:
@@ -10647,19 +10805,26 @@ class DBProxy(taskbuffer.OraDBProxy.DBProxy):
         methodName += ' <jediTaskID={0} nIDs={1}>'.format(jediTaskID,nIDs)
         tmpLog = MsgWrapper(logger,methodName)
         tmpLog.debug('start')
+        dbcfg=self.checkDbType()
         try:
             newFileIDs = []
             varMap = {}
             varMap[':nIDs'] = nIDs
             # sql to get fileID
-            sqlFID  = "SELECT {0}.JEDI_DATASET_CONT_FILEID_SEQ.nextval FROM ".format(jedi_config.db.schemaJEDI)
-            sqlFID += "(SELECT level FROM dual CONNECT BY level<=:nIDs) " 
+            if not dbcfg:
+                sqlFID  = "SELECT {0}.JEDI_DATASET_CONT_FILEID_SEQ.nextval FROM ".format(jedi_config.db.schemaJEDI)
+                sqlFID += "(SELECT level FROM dual CONNECT BY level<=:nIDs) " 
+            else:
+                #__KI we use aux table 'mysql_levels' which contains simple N values v of '1'.
+                # So we will use join on it with LIMIT=N_of_levels.
+                # And there will be error, if there is not so many N in table.
+                sqlFID  = "SELECT {0}.JEDI_DATASET_CONT_FILEID_SEQ.nextval FROM {0}.MYSQL_LEVELS LIMIT :nIDs".format(jedi_config.db.schemaJEDI)
             # start transaction
             self.conn.begin()
             self.cur.arraysize = 10000
             self.cur.execute(sqlFID+comment,varMap)
             resFID = self.cur.fetchall()
-            for fileID, in resFID:
+            for fileID in resFID:
                 newFileIDs.append(fileID)
             # commit
             if not self._commit():
