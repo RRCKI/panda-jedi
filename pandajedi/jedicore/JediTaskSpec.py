@@ -43,6 +43,7 @@ class JediTaskSpec(object):
         'allowPartialFinish' : 'AP',
         'altStageOut'        : 'AT',
         'ddmBackEnd'         : 'DE',
+        'disableAutoFinish'  : 'DF',
         'disableReassign'    : 'DI',
         'disableAutoRetry'   : 'DR',
         'dynamicNumEvents'   : 'DY',
@@ -68,6 +69,7 @@ class JediTaskSpec(object):
         'nEventsPerJob'      : 'NE',
         'nFilesPerJob'       : 'NF',
         'nGBPerJob'          : 'NG',
+        'noInputPooling'     : 'NI',
         'nJumboJobs'         : 'NJ',
         'nSitesPerJob'       : 'NS',
         'noWaitParent'       : 'NW',
@@ -75,10 +77,12 @@ class JediTaskSpec(object):
         'putLogToOS'         : 'PO',
         'runUntilClosed'     : 'RC',
         'registerDatasets'   : 'RD',
+        'registerEsFiles'    : 'RE',
         'respectLB'          : 'RL',
         'reuseSecOnDemand'   : 'RO',
         'respectSplitRule'   : 'RR',
         'randomSeed'         : 'RS',
+        'resurrectConsumers' : 'SC',
         'switchEStoNormal'   : 'SE',
         'stayOutputOnSite'   : 'SO',
         'scoutSuccessRate'   : 'SS',
@@ -89,6 +93,7 @@ class JediTaskSpec(object):
         'useFileAsSourceLFN' : 'UF',
         'usePrePro'          : 'UP',
         'useScout'           : 'US',
+        'usePrefetcher'      : 'UT',
         'useExhausted'       : 'UX',
         'writeInputToFile'   : 'WF',
         'waitInput'          : 'WI',
@@ -853,10 +858,13 @@ class JediTaskSpec(object):
             
             
     # set error dialog
-    def setErrDiag(self,diag,append=False):
+    def setErrDiag(self,diag,append=False,prepend=False):
         # set error dialog
         if append == True and self.errorDialog != None:
-            self.errorDialog = "{0} {1}".format(self.errorDialog,diag)
+            if not prepend:
+                self.errorDialog = "{0} {1}".format(self.errorDialog,diag)
+            else:
+                self.errorDialog = "{0} {1}".format(diag,self.errorDialog)
         elif append == None:
             # keep old log
             if self.errorDialog == None:
@@ -1363,6 +1371,63 @@ class JediTaskSpec(object):
     def inFilePosEvtNum(self):
         if self.splitRule != None:
             tmpMatch = re.search(self.splitRuleToken['inFilePosEvtNum']+'=(\d+)',self.splitRule)
+            if tmpMatch != None:
+                return True
+        return False
+
+
+
+    # register event service files
+    def registerEsFiles(self):
+        if self.splitRule != None:
+            tmpMatch = re.search(self.splitRuleToken['registerEsFiles']+'=(\d+)',self.splitRule)
+            if tmpMatch != None:
+                return True
+        return False
+
+
+
+    # disable auto finish
+    def disableAutoFinish(self):
+        if self.splitRule is not None:
+            tmpMatch = re.search(self.splitRuleToken['disableAutoFinish']+'=(\d+)',self.splitRule)
+            if tmpMatch != None:
+                return True
+        return False
+
+
+
+    # reset refined attributes which may confuse they system
+    def resetRefinedAttrs(self):
+        self.resetChangedAttr('splitRule')
+        self.resetChangedAttr('eventService')
+
+
+
+    # resurrect consumers
+    def resurrectConsumers(self):
+        if self.splitRule != None:
+            tmpMatch = re.search(self.splitRuleToken['resurrectConsumers']+'=(\d+)',self.splitRule)
+            if tmpMatch != None:
+                return True
+        return False
+
+
+
+    # use prefetcher
+    def usePrefetcher(self):
+        if self.splitRule != None:
+            tmpMatch = re.search(self.splitRuleToken['usePrefetcher']+'=(\d+)',self.splitRule)
+            if tmpMatch != None:
+                return True
+        return False
+
+
+
+    # no input pooling
+    def noInputPooling(self):
+        if self.splitRule != None:
+            tmpMatch = re.search(self.splitRuleToken['noInputPooling']+'=(\d+)',self.splitRule)
             if tmpMatch != None:
                 return True
         return False

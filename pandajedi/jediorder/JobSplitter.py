@@ -1,4 +1,5 @@
 from pandajedi.jedicore import Interaction
+from pandajedi.jedicore.InputChunk import InputChunk
 from pandajedi.jedicore.MsgWrapper import MsgWrapper
 
 # logger
@@ -54,6 +55,8 @@ class JobSplitter:
             maxOutSize = None
             # max size per job
             maxSizePerJob = taskSpec.getMaxSizePerJob()
+            if maxSizePerJob is not None:
+                maxSizePerJob += InputChunk.defaultOutputSize
             # dynamic number of events
             dynNumEvents = taskSpec.dynamicNumEvents()
             # max number of event ranges
@@ -111,7 +114,8 @@ class JobSplitter:
                                                                                                        maxOutSize,
                                                                                                        respectLB,
                                                                                                        dynNumEvents))
-        tmpLog.debug('multiplicity={0} splitByFields={1}'.format(multiplicity,str(splitByFields)))
+        tmpLog.debug('multiplicity={0} splitByFields={1} nFiles={2}'.format(multiplicity,str(splitByFields),
+                                                                            inputChunk.getNumFilesInMaster()))
         # split
         returnList = []
         subChunks  = []
@@ -143,10 +147,22 @@ class JobSplitter:
                     break
                 siteName = siteCandidate.siteName
                 siteSpec = siteMapper.getSite(siteName)
+                # directIO
+                if taskSpec.useLocalIO() or not siteSpec.isDirectIO() or taskSpec.allowInputLAN() is None \
+                        or inputChunk.isMerging or maxSizePerJob is not None:
+                    useDirectIO = False
+                else:
+                    useDirectIO = True
                 # get maxSize if it is set in taskSpec
                 maxSize = maxSizePerJob
-                if maxSize == None or maxSize > (siteSpec.maxwdir * 1024 * 1024):
+                if maxSize == None:
                     # use maxwdir as the default maxSize
+                    maxSize = siteSpec.maxwdir * 1024 * 1024
+                else:
+                    # add offset
+                    maxSize += sizeIntercepts
+                # cap
+                if maxSize > (siteSpec.maxwdir * 1024 * 1024) and not useDirectIO:
                     maxSize = siteSpec.maxwdir * 1024 * 1024
                 # max walltime      
                 maxWalltime = siteSpec.maxtime
@@ -167,7 +183,7 @@ class JobSplitter:
                 tmpLog.debug('maxSize={0} maxWalltime={1} coreCount={2} corePower={3} maxNumEventRanges={4}'.format(maxSize,maxWalltime,
                                                                                                                     coreCount,corePower,
                                                                                                                     maxNumEventRanges))
-
+                tmpLog.debug('useDirectIO={0}'.format(useDirectIO))
             # get sub chunk
             subChunk = inputChunk.getSubChunk(siteName,maxSize=maxSize,
                                               maxNumFiles=maxNumFiles,
@@ -187,7 +203,8 @@ class JobSplitter:
                                               maxNumEventRanges=maxNumEventRanges,
                                               multiplicity=multiplicity,
                                               splitByFields=splitByFields,
-                                              tmpLog=tmpLog)
+                                              tmpLog=tmpLog,
+                                              useDirectIO=useDirectIO)
             if subChunk == None:
                 break
             if subChunk != []:

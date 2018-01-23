@@ -454,6 +454,8 @@ class JobGeneratorThread (WorkerThread):
                 for tmpJediTaskID,inputList in taskInputList:
                     lastJediTaskID = tmpJediTaskID
                     # loop over all inputs
+                    nBrokergeFailed = 0
+                    nBrokergeSucceeded = 0
                     for idxInputList,tmpInputItem in enumerate(inputList):
                         taskSpec,cloudName,inputChunk = tmpInputItem
                         # reset error dialog
@@ -513,12 +515,15 @@ class JobGeneratorThread (WorkerThread):
                                 tmpLog.error('brokerage crashed with {0}:{1} {2}'.format(errtype.__name__,errvalue,traceback.format_exc()))
                                 tmpStat = Interaction.SC_FAILED
                             if tmpStat != Interaction.SC_SUCCEEDED:
-                                tmpErrStr = 'brokerage failed'
+                                nBrokergeFailed += 1
+                                tmpErrStr = 'brokerage failed for {0} input datasets when trying {1} datasets'.format(nBrokergeFailed, len(inputList))
                                 tmpLog.error(tmpErrStr)
-                                taskSpec.setOnHold()
+                                if nBrokergeSucceeded == 0:
+                                    taskSpec.setOnHold()
                                 taskSpec.setErrDiag(tmpErrStr,True)
                                 goForward = False
                             else:
+                                nBrokergeSucceeded += 1
                                 # collect brokerage lock ID
                                 brokerageLockID = jobBroker.getBaseLockID(taskSpec.vo,taskSpec.prodSourceLabel)
                                 if brokerageLockID != None:
@@ -874,6 +879,8 @@ class JobGeneratorThread (WorkerThread):
                     jobSpec.maxDiskUnit      = 'MB'
                     if inputChunk.isMerging and taskSpec.mergeCoreCount != None:
                         jobSpec.coreCount    = taskSpec.mergeCoreCount
+                    elif inputChunk.isMerging and siteSpec.sitename != siteSpec.get_unified_name():
+                        jobSpec.coreCount = 1
                     else:
                         if taskSpec.coreCount == 1 or siteSpec.coreCount in [None, 0]:
                             jobSpec.coreCount = 1
@@ -882,7 +889,7 @@ class JobGeneratorThread (WorkerThread):
                     jobSpec.minRamCount, jobSpec.minRamUnit = JediCoreUtils.getJobMinRamCount(taskSpec, inputChunk, siteSpec, jobSpec.coreCount)
                     # calculate the hs06 occupied by the job
                     if siteSpec.corepower:
-                        jobSpec.hs06 = (siteSpec.coreCount or 1) * siteSpec.corepower # default 0 and None corecount to 1
+                        jobSpec.hs06 = (jobSpec.coreCount or 1) * siteSpec.corepower # default 0 and None corecount to 1
                     jobSpec.ipConnectivity   = 'yes'
                     jobSpec.metadata         = ''
                     if inputChunk.isMerging:
@@ -1043,6 +1050,9 @@ class JobGeneratorThread (WorkerThread):
                     # merge ES on ObjectStore
                     if taskSpec.mergeEsOnOS():
                         specialHandling = EventServiceUtils.setHeaderForMergeAtOS(specialHandling)
+                    # resurrect consumers
+                    if taskSpec.resurrectConsumers():
+                        specialHandling = EventServiceUtils.setHeaderToResurrectConsumers(specialHandling)
                     # set specialHandling
                     if specialHandling != '':
                         jobSpec.specialHandling = specialHandling
@@ -1067,6 +1077,12 @@ class JobGeneratorThread (WorkerThread):
                     # in-file positional event number
                     if taskSpec.inFilePosEvtNum():
                         jobSpec.setInFilePosEvtNum()
+                    # register event service files
+                    if taskSpec.registerEsFiles():
+                        jobSpec.setRegisterEsFiles()
+                    # use prefetcher
+                    if taskSpec.usePrefetcher():
+                        jobSpec.setUsePrefetcher()
                     # write input to file
                     if taskSpec.writeInputToFile():
                         jobSpec.setToWriteInputToFile()
@@ -1258,13 +1274,13 @@ class JobGeneratorThread (WorkerThread):
                         # stay output on site
                         if taskSpec.stayOutputOnSite():
                             tmpOutFileSpec.destinationSE = siteName
-                            tmpOutFileSpec.destinationDBlockToke = 'dst:{0}'.format(siteSpec.ddm)
+                            tmpOutFileSpec.destinationDBlockToken = 'dst:{0}'.format(siteSpec.ddm_output)
                         # distributed dataset
                         tmpDistributedDestination = DataServiceUtils.getDistributedDestination(tmpOutFileSpec.destinationDBlockToken)
                         if tmpDistributedDestination != None:
                             tmpDddKey = (siteName,tmpDistributedDestination)
                             if not tmpDddKey in dddMap:
-                                dddMap[tmpDddKey] = siteSpec.ddm_endpoints.getAssoicatedEndpoint(tmpDistributedDestination)
+                                dddMap[tmpDddKey] = siteSpec.ddm_endpoints_output.getAssociatedEndpoint(tmpDistributedDestination)
                             if dddMap[tmpDddKey] != None:
                                 tmpOutFileSpec.destinationSE = siteName
                                 tmpOutFileSpec.destinationDBlockToken = 'ddd:{0}'.format(dddMap[tmpDddKey]['ddm_endpoint_name'])
@@ -1380,6 +1396,7 @@ class JobGeneratorThread (WorkerThread):
             if fileSpec != None:
                 pandaFileSpec = fileSpec.convertToJobFileSpec(datasetSpec,setType='input')
                 pandaFileSpec.dispatchDBlock = pandaFileSpec.dataset
+                pandaFileSpec.prodDBlockToken = 'local'
                 if fileSpec.status == 'finished':
                     pandaFileSpec.status = 'ready'
                 # make dummy jobSpec
@@ -1416,10 +1433,18 @@ class JobGeneratorThread (WorkerThread):
             jobSpec.workQueue_ID     = taskSpec.workQueue_ID
             jobSpec.gshare           = taskSpec.gshare
             jobSpec.metadata         = ''
-            if taskSpec.coreCount == 1 or siteSpec.coreCount in [None, 0]:
+            if taskSpec.coreCount == 1 or siteSpec.coreCount in [None, 0] or siteSpec.sitename != siteSpec.get_unified_name():
                 jobSpec.coreCount = 1
             else:
                 jobSpec.coreCount = siteSpec.coreCount
+            try:
+                jobSpec.resource_type = self.taskBufferIF.get_resource_type_job(jobSpec)
+            except:
+                jobSpec.resource_type = 'Undefined'
+                tmpLog.error('set resource_type excepted with {0}'.format(traceback.format_exc()))
+            # calculate the hs06 occupied by the job
+            if siteSpec.corepower:
+                jobSpec.hs06 = (jobSpec.coreCount or 1) * siteSpec.corepower # default 0 and None corecount to 1
             # make libDS name
             if datasetSpec == None or datasetSpec.state == 'closed' or fileSpec == None:
                 # make new libDS
@@ -1497,6 +1522,7 @@ class JobGeneratorThread (WorkerThread):
             runFileSpec.dispatchDBlock = fileSpec.dataset
             runFileSpec.destinationDBlock = None
             runFileSpec.type = 'input'
+            runFileSpec.prodDBlockToken = 'local'
             # return
             return Interaction.SC_SUCCEEDED,jobSpec,runFileSpec,datasetToRegister
         except:
@@ -1923,11 +1949,19 @@ class JobGeneratorThread (WorkerThread):
         newPandaJob.computingSite = sites[index % nSites]
         siteSpec = self.siteMapper.getSite(newPandaJob.computingSite)
         newPandaJob.computingSite = siteSpec.get_unified_name()
-        if newPandaJob.coreCount > 1:
+        if taskSpec.coreCount == 1 or siteSpec.coreCount in [None, 0]:
+            newPandaJob.coreCount = 1
+        else:
             newPandaJob.coreCount = siteSpec.coreCount
         if taskSpec is not None and inputChunk is not None:
             newPandaJob.minRamCount, newPandaJob.minRamUnit = JediCoreUtils.getJobMinRamCount(taskSpec, inputChunk,
                                                                                               siteSpec, newPandaJob.coreCount)
+
+        try:
+            newPandaJob.resource_type = self.taskBufferIF.get_resource_type_job(newPandaJob)
+        except:
+            newPandaJob.resource_type = 'Undefined'
+
         datasetList = set()
         # reset SH for jumbo
         if forJumbo:
@@ -1977,7 +2011,7 @@ class JobGeneratorThread (WorkerThread):
                 datasetSpec = outDsMap[newFileSpec.datasetID]
                 tmpDistributedDestination = DataServiceUtils.getDistributedDestination(datasetSpec.storageToken)
                 if tmpDistributedDestination != None:
-                    tmpDestination = siteSpec.ddm_endpoints.getAssoicatedEndpoint(tmpDistributedDestination)
+                    tmpDestination = siteSpec.ddm_endpoints_output.getAssociatedEndpoint(tmpDistributedDestination)
                     # change destination
                     newFileSpec.destinationSE = newPandaJob.computingSite
                     if tmpDestination != None:

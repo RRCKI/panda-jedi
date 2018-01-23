@@ -77,7 +77,7 @@ class JediTaskBuffer(TaskBuffer.TaskBuffer, CommandReceiveInterface):
                                    nFilesPerJob,nEventsPerRange,nChunksForScout,includePatt,
                                    excludePatt,xmlConfig,noWaitParent,parent_tid,pid,maxFailure,
                                    useRealNumEvents,respectLB,tgtNumEventsPerJob,skipFilesUsedBy,
-                                   ramCount,taskSpec):
+                                   ramCount,taskSpec,skipShortInput):
         # get DBproxy
         proxy = self.proxyPool.getProxy()
         # exec
@@ -90,7 +90,7 @@ class JediTaskBuffer(TaskBuffer.TaskBuffer, CommandReceiveInterface):
                                                   noWaitParent,parent_tid,pid,maxFailure,
                                                   useRealNumEvents,respectLB,
                                                   tgtNumEventsPerJob,skipFilesUsedBy,
-                                                  ramCount,taskSpec)
+                                                  ramCount,taskSpec,skipShortInput)
         # release proxy
         self.proxyPool.putProxy(proxy)
         # return
@@ -1338,11 +1338,11 @@ class JediTaskBuffer(TaskBuffer.TaskBuffer, CommandReceiveInterface):
         return retVal
 
     # get network metrics for brokerage
-    def getPandaSiteToStorageSiteMapping(self):
+    def getPandaSiteToOutputStorageSiteMapping(self):
         # get DBproxy
         proxy = self.proxyPool.getProxy()
         # exec
-        retVal = proxy.getPandaSiteToStorageSiteMapping()
+        retVal = proxy.getPandaSiteToOutputStorageSiteMapping()
         # release proxy
         self.proxyPool.putProxy(proxy)
         # return
@@ -1484,6 +1484,32 @@ class JediTaskBuffer(TaskBuffer.TaskBuffer, CommandReceiveInterface):
         proxy = self.proxyPool.getProxy()
         # exec
         retVal = proxy.getNumUnprocessedEvents_JEDI(vo, prodSourceLabel, criteria)
+        # release proxy
+        self.proxyPool.putProxy(proxy)
+        # return
+        return retVal
+
+
+
+    # get number of jobs for a task
+    def getNumJobsForTask_JEDI(self, jediTaskID):
+        # get DBproxy
+        proxy = self.proxyPool.getProxy()
+        # exec
+        retVal = proxy.getNumJobsForTask_JEDI(jediTaskID)
+        # release proxy
+        self.proxyPool.putProxy(proxy)
+        # return
+        return retVal
+
+
+
+    # get number map for standby jobs
+    def getNumMapForStandbyJobs_JEDI(self, workqueue):
+        # get DBproxy
+        proxy = self.proxyPool.getProxy()
+        # exec
+        retVal = proxy.getNumMapForStandbyJobs_JEDI(workqueue)
         # release proxy
         self.proxyPool.putProxy(proxy)
         # return

@@ -192,7 +192,7 @@ class TaskRefinerBase (object):
         if 'goal' in taskParamMap:
             try:
                 taskSpec.goal = int(float(taskParamMap['goal'])*10)
-                if taskSpec.goal >= 1000:
+                if taskSpec.goal > 1000:
                     taskSpec.goal = None
             except:
                 pass
@@ -288,6 +288,15 @@ class TaskRefinerBase (object):
             self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['noExecStrCnv'])
         if 'inFilePosEvtNum' in taskParamMap and taskParamMap['inFilePosEvtNum'] == True:
             self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['inFilePosEvtNum'])
+        if self.taskSpec.useEventService() and not taskSpec.useJobCloning():
+            if 'registerEsFiles' in taskParamMap and taskParamMap['registerEsFiles'] == True:
+                self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['registerEsFiles'])
+        if 'disableAutoFinish' in taskParamMap and taskParamMap['disableAutoFinish'] == True:
+            self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['disableAutoFinish'])
+        if 'resurrectConsumers' in taskParamMap and taskParamMap['resurrectConsumers'] == True:
+            self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['resurrectConsumers'])
+        if 'usePrefetcher' in taskParamMap and taskParamMap['usePrefetcher'] == True:
+            self.setSplitRule(None,1,JediTaskSpec.splitRuleToken['usePrefetcher'])
         # work queue
         workQueue = None
         if 'workQueueName' in taskParamMap:
@@ -719,15 +728,13 @@ class TaskRefinerBase (object):
         if self.taskSpec.splitRule in [None,'']:
             self.taskSpec.splitRule = tmpStr
         else:
-            tmpMatch = re.search(valName+'=(-*\d+)',self.taskSpec.splitRule)
+            tmpMatch = re.search(valName+'=(-*\d+)(,-*\d+)*',self.taskSpec.splitRule)
             if tmpMatch == None:
                 # append
                 self.taskSpec.splitRule += ',{0}'.format(tmpStr)
             else:
                 # replace
-                self.taskSpec.splitRule = re.sub(valName+'=(-*\d+)',
-                                                 tmpStr,
-                                                 self.taskSpec.splitRule)
+                self.taskSpec.splitRule = self.taskSpec.splitRule.replace(tmpMatch.group(0), tmpStr)
         return    
 
 

@@ -77,25 +77,7 @@ class AtlasProdJobBroker (JobBrokerBase):
         tmpLog.bulkSendMsg('prod_brokerage')
         tmpLog.debug('sent')
 
-    # get list of unified sites
-    def get_unified_sites(self, scan_site_list):
-        unified_list = set()
-        for tmpSiteName in scan_site_list:
-            tmpSiteSpec = self.siteMapper.getSite(tmpSiteName)
-            unifiedName = tmpSiteSpec.get_unified_name()
-            unified_list.add(unifiedName)
-        return tuple(unified_list)
-
-    # get list of pseudo sites
-    def get_pseudo_sites(self, unified_list, scan_site_list):
-        unified_list = set(unified_list)
-        pseudo_list = set()
-        for tmpSiteName in scan_site_list:
-            tmpSiteSpec = self.siteMapper.getSite(tmpSiteName)
-            if tmpSiteSpec.get_unified_name() in unified_list:
-                pseudo_list.add(tmpSiteName)
-        return tuple(pseudo_list)
-        
+       
     def convertMBpsToWeight(self, mbps):
         """
         Takes MBps value and converts to a weight between 1 and 2
@@ -241,6 +223,10 @@ class AtlasProdJobBroker (JobBrokerBase):
             useMP = 'unuse'
         # get workQueue
         workQueue = self.taskBufferIF.getWorkQueueMap().getQueueWithIDGshare(taskSpec.workQueue_ID, taskSpec.gshare)
+        if workQueue.is_global_share:
+            wq_tag = workQueue.queue_name
+        else:
+            wq_tag = workQueue.queue_id
 
         ######################################
         # selection for status
@@ -248,13 +234,13 @@ class AtlasProdJobBroker (JobBrokerBase):
             newScanSiteList = []
             for tmpSiteName in scanSiteList:
                 tmpSiteSpec = self.siteMapper.getSite(tmpSiteName)
-                # skip merged queues
+                # skip unified queues
                 if tmpSiteSpec.is_unified:
                     tmpLog.info('  skip site=%s due to is_unified=%s criteria=-unified' % (tmpSiteName,tmpSiteSpec.is_unified))
                     continue
                 # check site status
                 skipFlag = False
-                if tmpSiteSpec.status != 'online':
+                if tmpSiteSpec.status not in ['online', 'standby']:
                     skipFlag = True
                 if not skipFlag:    
                     newScanSiteList.append(tmpSiteName)
@@ -271,7 +257,7 @@ class AtlasProdJobBroker (JobBrokerBase):
         #################################################
         # WORLD CLOUD: get the nucleus and the network map
         nucleus = taskSpec.nucleus
-        storageMapping = self.taskBufferIF.getPandaSiteToStorageSiteMapping()
+        storageMapping = self.taskBufferIF.getPandaSiteToOutputStorageSiteMapping()
 
         if taskSpec.useWorldCloud() and nucleus:
             # get connectivity stats to the nucleus in case of WORLD cloud
@@ -322,10 +308,11 @@ class AtlasProdJobBroker (JobBrokerBase):
         ######################################
         # selection for high priorities
         t1WeightForHighPrio = 1
-        if (taskSpec.currentPriority >= 900 or inputChunk.useScout()) \
+        if (taskSpec.currentPriority >= 800 or inputChunk.useScout()) \
                 and not sitePreAssigned and not siteListPreAssigned:
             if not taskSpec.useEventService():
-                t1WeightForHighPrio = 100
+                if taskSpec.currentPriority >= 900 or inputChunk.useScout():
+                    t1WeightForHighPrio = 100
             newScanSiteList = []
             for tmpSiteName in scanSiteList:
                 tmpSiteSpec = self.siteMapper.getSite(tmpSiteName)
@@ -512,6 +499,9 @@ class AtlasProdJobBroker (JobBrokerBase):
                 siteListWithSW = self.taskBufferIF.checkSitesWithRelease(unified_site_list,
                                                                          releases=taskSpec.transHome.split('-')[-1],
                                                                          cmtConfig=taskSpec.architecture)
+                siteListWithSW += self.taskBufferIF.checkSitesWithRelease(unified_site_list,
+                                                                          caches=taskSpec.transHome,
+                                                                          cmtConfig=taskSpec.architecture)
             elif re.search('rel_\d+(\n|$)',taskSpec.transHome) is None and \
                     re.search('\d{4}-\d{2}-\d{2}T\d{4}$',taskSpec.transHome) is None:
                 # only cache is checked for normal tasks
@@ -655,7 +645,7 @@ class AtlasProdJobBroker (JobBrokerBase):
                 pass
             else:
                 # check endpoint
-                tmpEndPoint = tmpSiteSpec.ddm_endpoints.getEndPoint(tmpSiteSpec.ddm)
+                tmpEndPoint = tmpSiteSpec.ddm_endpoints_output.getEndPoint(tmpSiteSpec.ddm_output)
                 if tmpEndPoint != None:
                     # check free size
                     tmpSpaceSize = 0
@@ -665,12 +655,12 @@ class AtlasProdJobBroker (JobBrokerBase):
                         tmpSpaceSize += tmpEndPoint['space_expired']
                     diskThreshold = 200
                     if tmpSpaceSize < diskThreshold:
-                        tmpLog.info('  skip site={0} due to disk shortage at {1} {2}GB < {3}GB criteria=-disk'.format(tmpSiteName,tmpSiteSpec.ddm,
-                                                                                                                    tmpSpaceSize,diskThreshold))
+                        tmpLog.info('  skip site={0} due to disk shortage at {1} {2}GB < {3}GB criteria=-disk'.format(tmpSiteName, tmpSiteSpec.ddm_output,
+                                                                                                                    tmpSpaceSize, diskThreshold))
                         continue
                     # check if blacklisted
                     if tmpEndPoint['blacklisted'] == 'Y':
-                        tmpLog.info('  skip site={0} since endpoint={1} is blacklisted in DDM criteria=-blacklist'.format(tmpSiteName,tmpSiteSpec.ddm))
+                        tmpLog.info('  skip site={0} since endpoint={1} is blacklisted in DDM criteria=-blacklist'.format(tmpSiteName, tmpSiteSpec.ddm_output))
                         continue
             newScanSiteList.append(tmpSiteName)
         scanSiteList = self.get_pseudo_sites(newScanSiteList, scanSiteList)
@@ -954,9 +944,10 @@ class AtlasProdJobBroker (JobBrokerBase):
                 nPilot = 0
                 if nWNmap.has_key(tmpSiteName):
                     nPilot = nWNmap[tmpSiteName]['getJob'] + nWNmap[tmpSiteName]['updateJob']
-                # skip no pilot sites unless the task and the site use jumbo jobs
+                # skip no pilot sites unless the task and the site use jumbo jobs or the site is standby
                 if nPilot == 0 and not 'test' in taskSpec.prodSourceLabel and \
-                        (taskSpec.getNumJumboJobs() == None or not tmpSiteSpec.useJumboJobs()):
+                        (taskSpec.getNumJumboJobs() == None or not tmpSiteSpec.useJumboJobs()) and \
+                        tmpSiteSpec.getNumStandby(wq_tag, taskSpec.resource_type) is None:
                     tmpLog.info('  skip site=%s due to no pilot criteria=-nopilot' % tmpSiteName)
                     continue
                 newScanSiteList.append(tmpSiteName)
@@ -978,9 +969,9 @@ class AtlasProdJobBroker (JobBrokerBase):
         siteFilesMap = {}
         for datasetSpec in inputChunk.getDatasets():
             try:
-                # mapping between sites and storage endpoints
-                siteStorageEP = AtlasBrokerUtils.getSiteStorageEndpointMap(scanSiteList,self.siteMapper,
-                                                                           ignoreCC=True)
+                # mapping between sites and input storage endpoints
+                siteStorageEP = AtlasBrokerUtils.getSiteInputStorageEndpointMap(self.get_unified_sites(scanSiteList),
+                                                                                self.siteMapper, ignore_cc=True)
                 # disable file lookup for merge jobs or secondary datasets
                 checkCompleteness = True
                 useCompleteOnly = False
@@ -992,10 +983,9 @@ class AtlasProdJobBroker (JobBrokerBase):
                 tmpAvFileMap = self.ddmIF.getAvailableFiles(datasetSpec,
                                                             siteStorageEP,
                                                             self.siteMapper,
-                                                            ngGroup=[1],
-                                                            checkCompleteness=checkCompleteness,
-                                                            storageToken=datasetSpec.storageToken,
-                                                            useCompleteOnly=useCompleteOnly)
+                                                            check_completeness=checkCompleteness,
+                                                            storage_token=datasetSpec.storageToken,
+                                                            complete_only=useCompleteOnly)
                 if tmpAvFileMap == None:
                     raise Interaction.JEDITemporaryError,'ddmIF.getAvailableFiles failed'
                 availableFileMap[datasetSpec.datasetName] = tmpAvFileMap
@@ -1016,9 +1006,9 @@ class AtlasProdJobBroker (JobBrokerBase):
                     availableFiles = availableFileMap[datasetSpec.datasetName][tmpSiteName]
                     for tmpFileSpec in \
                             availableFiles['localdisk']+availableFiles['cache']:
-                        if not tmpFileSpec.fileID in siteFilesMap[tmpSiteName]:
+                        if not tmpFileSpec.lfn in siteFilesMap[tmpSiteName]:
                             siteSizeMap[tmpSiteName] += tmpFileSpec.fsize
-                        siteFilesMap[tmpSiteName].add(tmpFileSpec.fileID)
+                        siteFilesMap[tmpSiteName].add(tmpFileSpec.lfn)
         # get max total size
         tmpTotalSizes = siteSizeMap.values()
         tmpTotalSizes.sort()
@@ -1035,7 +1025,8 @@ class AtlasProdJobBroker (JobBrokerBase):
         # selection for fileSizeToMove
         ioIntensityCutoff = 200
         moveSizeCutoffGB = 10
-        if not sitePreAssigned and totalSize > 0 and not inputChunk.isMerging and taskSpec.ioIntensity is not None and taskSpec.ioIntensity > ioIntensityCutoff:
+        if not sitePreAssigned and totalSize > 0 and not inputChunk.isMerging and taskSpec.ioIntensity is not None and taskSpec.ioIntensity > ioIntensityCutoff \
+                and not (taskSpec.useEventService() and not taskSpec.useJobCloning()):
             newScanSiteList = []
             for tmpSiteName in self.get_unified_sites(scanSiteList):
                 tmpSiteSpec = self.siteMapper.getSite(tmpSiteName)
@@ -1060,10 +1051,8 @@ class AtlasProdJobBroker (JobBrokerBase):
         ######################################
         # calculate weight
         if workQueue.is_global_share:
-            wq_tag = workQueue.queue_name
             tmpSt, jobStatPrioMap = self.taskBufferIF.getJobStatisticsByGlobalShare(taskSpec.vo)
         else:
-            wq_tag = workQueue.queue_id
             tmpSt, jobStatPrioMap = self.taskBufferIF.getJobStatisticsWithWorkQueue_JEDI(taskSpec.vo,
                                                                                          taskSpec.prodSourceLabel)
 
@@ -1090,6 +1079,17 @@ class AtlasProdJobBroker (JobBrokerBase):
                 nPilot = nPilotMap[tmpSiteName]
             else:
                 nPilot = 0
+            # take into account the number of standby jobs
+            numStandby = tmpSiteSpec.getNumStandby(wq_tag, taskSpec.resource_type)
+            if numStandby is None:
+                pass
+            elif numStandby == 0:
+                # use the number of starting jobs as the number of standby jobs
+                nRunning = nStarting
+                nStarting = 0
+            else:
+                # the number of standby jobs is defined
+                nRunning = numStandby
             manyAssigned = float(nAssigned + 1) / float(nActivated + 1)
             manyAssigned = min(2.0,manyAssigned)
             manyAssigned = max(1.0,manyAssigned)
@@ -1191,7 +1191,7 @@ class AtlasProdJobBroker (JobBrokerBase):
                     siteCandidateSpec.remoteFiles += availableFiles[tmpSiteName]['remote']
             # add files as remote since WAN access is allowed
             if taskSpec.allowInputWAN() and tmpSiteSpec.allowWanInputAccess():
-                siteCandidateSpec.remoteProtocol = 'fax'
+                siteCandidateSpec.remoteProtocol = 'direct'
                 for datasetSpec in inputChunk.getDatasets(): 
                     siteCandidateSpec.remoteFiles += datasetSpec.Files
             # check if site is locked for WORLD

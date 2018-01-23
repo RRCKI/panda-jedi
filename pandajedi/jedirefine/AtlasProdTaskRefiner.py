@@ -37,17 +37,22 @@ class AtlasProdTaskRefiner (TaskRefinerBase):
             else:
                 # get threshold
                 minNumEvents = self.taskBufferIF.getConfigValue('taskrefiner', 'AES_EVENTPOOLSIZE', 'jedi', 'atlas')
-                nEvents, lastTaskTime = self.taskBufferIF.getNumUnprocessedEvents_JEDI(taskParamMap['vo'],
-                                                                                       taskParamMap['prodSourceLabel'],
-                                                                                       {'eventService': 1})
-                tmpLog.info('check for ES tot_num_unprocessed_events_AES={0} target_num_events_AES={1} last_AES_task_time={2}'.format(nEvents,
-                                                                                                                                      minNumEvents,
-                                                                                                                                      lastTaskTime))
+                maxPending = self.taskBufferIF.getConfigValue('taskrefiner', 'AES_MAXPENDING', 'jedi', 'atlas')
+                nEvents, lastTaskTime, nPendingTasks = self.taskBufferIF.getNumUnprocessedEvents_JEDI(taskParamMap['vo'],
+                                                                                                      taskParamMap['prodSourceLabel'],
+                                                                                                      {'eventService': 1})
+                tmpStr = 'check for ES '
+                tmpStr += 'tot_num_unprocessed_events_AES={0} target_num_events_AES={1} last_AES_task_time={2} '.format(nEvents,
+                                                                                                                        minNumEvents,
+                                                                                                                        lastTaskTime)
+                tmpStr += 'num_pending_tasks_AES={0} max_pending_tasks_AES={1} '.format(nPendingTasks, maxPending)
+                tmpLog.info(tmpStr)
                 # not chane many tasks at once
                 if lastTaskTime is None or (lastTaskTime < datetime.datetime.utcnow() - datetime.timedelta(minutes=5)):
-                    if minNumEvents is not None and nEvents < minNumEvents:
+                    if minNumEvents is not None and nEvents < minNumEvents and \
+                            maxPending is not None and (maxPending is None or maxPending > nPendingTasks):
                         autoEsConversion = True
-                        tmpLog.info('converted to AES')
+                        tmpLog.info('will be converted to AES unless it goes to pending')
         # add ES paramsters
         if ('esFraction' in taskParamMap and taskParamMap['esFraction'] > 0) or autoEsConversion:
             tmpStr  = '<PANDA_ES_ONLY>--eventService=True</PANDA_ES_ONLY>'
@@ -56,6 +61,7 @@ class AtlasProdTaskRefiner (TaskRefinerBase):
             if 'nEventsPerWorker' not in taskParamMap and \
                     (('esFraction' in taskParamMap and taskParamMap['esFraction'] > random.random()) or autoEsConversion):
                 taskParamMap['nEventsPerWorker'] = 1
+                taskParamMap['registerEsFiles'] = True
                 if 'nEsConsumers' not in taskParamMap:
                     tmpVal = self.taskBufferIF.getConfigValue('taskrefiner', 'AES_NESCONSUMERS', 'jedi', 'atlas')
                     if tmpVal is None:
@@ -70,6 +76,7 @@ class AtlasProdTaskRefiner (TaskRefinerBase):
                 if 'maxAttemptES' not in taskParamMap:
                     taskParamMap['maxAttemptES'] = 10
                 taskParamMap['coreCount'] = 0
+                taskParamMap['resurrectConsumers'] = True
         TaskRefinerBase.extractCommon(self,jediTaskID,taskParamMap,workQueueMapper,splitRule)
 
 

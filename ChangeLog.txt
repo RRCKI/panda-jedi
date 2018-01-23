@@ -1,5 +1,106 @@
 Release Notes
 
+* 1/19/2017
+  * setting superStatus and T_TASK.status consistently
+
+* 1/17/2017
+  * added nStandby
+
+* 12/15/2017
+  * changed to exclude workDirSize from NG
+
+* 12/14/2017
+  * changing gshare of prod tasks when 95% done
+
+* 12/7/2017
+  * checking maxattempt when retryTask_JEDI
+
+* 11/29/2017
+  * setting allowAccessLAN to analysis tasks
+  * changed InputChunk not to ignore input size for directIO sites if NG is used
+
+* 11/27/2017
+  * using resurrectConsumers for ES tasks by default
+  * changed InputChunk to ignore input size for directIO sites
+
+* 11/17/2017
+  * using NG as tot size of input when pooing input files in child tasks
+
+* 11/15/2017
+  * added noInputPooling
+
+* 11/14/2017
+  * fixed double counting of input files in AtlasPJB
+
+* 11/13/2017
+  * setting prodDBlockToken=local to lib.tgz
+  * using 60d of lifetime for merged parent datasets
+
+* 11/10/2017
+  * Changed call to getHS06sec to new mode
+
+* 11/6/2017
+  * sending analysis tasks with short scouts to exhausted
+
+* 10/25/2017
+  * fixed AtlasTS to resurrect ES datasets when tasks are retried
+  * getSURLsFromLFC to also check for gsiftp copies
+  * change regex to accept se's not ending with /
+
+* 10/16/2017
+  * unified PQ for analysis
+  * disable timeout for exhausted when auto finish is disabled
+  * setting resource_type for buildJob
+  * fixed AtlasAJB to unified PQ
+
+* 10/10/2017
+  * adding the offset to nGBPerJob
+
+* 10/09/2017
+  * added usePrefetcher
+
+* 9/27/2017
+  * added resurrectConsumers
+
+* 9/26/2017
+  * removed splitrule check in reactivatePending
+
+* 9/15/2017
+  * added task.diskIO
+
+* 9/14/2017
+  * fixed flip-flop of AES flag in refiner
+
+* 9/11/2017
+  * disabled IO check for event service in AtlasPJB
+
+* 9/6/2017
+  * added disableAutoFinish
+  * deleting event service datasets
+  * fixed respectSplutRule to set nFilesTobeUsed properly
+
+* 8/28/2017
+  * fixed AtlasAJB/PJB for 3 digtis caches
+
+* 8/23/2017
+  * using (type=SCRATCHDISK)\notforextracopy=1 for secondary copy of user output
+
+* 8/18/2017
+  * added registerEsFiles
+
+* 8/14/2017
+  * added skipShortInput
+
+* 8/11/2017
+  * added AES_MAXPENDIG
+  * added SCOUT_CPUTIME_RANK, SCOUT_RAMCOUNT_RANK, SCOUT_RAMCOUNT_MARGIN
+
+* 8/10/2017
+  * fixed retryTask not to change running files
+
+* 8/9/2017
+  * fixed AF when tasks are re-refined
+
 * 7/11/2017
   * disabled second copy when --destSE
 
