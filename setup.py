@@ -17,6 +17,7 @@ if os.environ.has_key('BUILD_NUMBER'):
 # define user name and group
 panda_user = 'atlpan'
 panda_group = 'zp'
+panda_home = '/srv/panda/'
 
 import re
 import sys
@@ -107,6 +108,7 @@ class install_data_panda (install_data_org):
         new_data_files = []
         for destDir,dataFiles in self.data_files:
             newFilesList = []
+            destDir=panda_home+destDir
             for srcFile in dataFiles:
                 # check extension
                 if not srcFile.endswith('.template'):

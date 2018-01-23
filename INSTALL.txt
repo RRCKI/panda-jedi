@@ -2,7 +2,7 @@ Installation
 --------------------
 
 1. Install and configure panda-server as described in https://github.com/PanDAWMS/panda-server/blob/master/INSTALL.txt since JEDI requires panda-server components
-
+Note: setup.py was modified - now it will install all including 'etc' to panda_home, which point to '/srv/panda/' (hardcoded in setup.py)
 
 2. Install panda-jedi package
 
